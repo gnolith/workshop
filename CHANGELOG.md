@@ -15,6 +15,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 - Health exposes neutral `checks.persistence` while retaining `checks.d1`.
 - HTTP/Site runtime remains source-compatible over the new core seam.
+- Taproot-backed statement creation and revision tools now require explicit,
+  nonblank authored text and forward it without normalization. Initial Item
+  claims are covered; statement removal remains text-exempt.
+- The Taproot adapter now exposes an exact typed consumer contract with a
+  commit-pinned packed-peer conformance gate.
 
 ## [0.1.1] - 2026-07-20
 

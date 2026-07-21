@@ -30,6 +30,12 @@ const object = (description: string) => ({
   description,
   additionalProperties: true,
 });
+const authoredText = (description: string) => ({
+  type: 'string',
+  minLength: 1,
+  pattern: '\\S',
+  description,
+});
 const array = (items: unknown, description: string) => ({
   type: 'array',
   items,
@@ -274,6 +280,28 @@ const knowledgeReadTools = new Set([
   'export_entity_json',
 ]);
 
+const statementSchema = {
+  type: 'object',
+  description:
+    'Complete Wikibase statement with authored natural-language text for this exact revision.',
+  properties: {
+    text: authoredText(
+      'Authored natural-language description of this exact statement revision.',
+    ),
+  },
+  required: ['text'],
+  additionalProperties: true,
+};
+
+const claimsSchema = {
+  type: 'object',
+  description: 'Initial statements grouped by property ID.',
+  additionalProperties: {
+    type: 'array',
+    items: statementSchema,
+  },
+};
+
 const knowledgeProperties: Record<string, Record<string, unknown>> = {
   search_entities: {
     query: string('Search text.'),
@@ -289,7 +317,7 @@ const knowledgeProperties: Record<string, Record<string, unknown>> = {
     labels: object('Language label map.'),
     descriptions: object('Language description map.'),
     aliases: object('Language alias map.'),
-    claims: object('Initial statements by property.'),
+    claims: claimsSchema,
     sitelinks: object('Initial sitelinks.'),
   },
   create_property: {
@@ -335,13 +363,13 @@ const knowledgeProperties: Record<string, Record<string, unknown>> = {
   },
   add_statement: {
     entityId: string('Entity ID.'),
-    statement: object('Complete Wikibase statement.'),
+    statement: statementSchema,
     expectedRevision: integer('Current revision.'),
   },
   replace_statement: {
     entityId: string('Entity ID.'),
     statementId: string('Statement ID.'),
-    statement: object('Replacement statement.'),
+    statement: statementSchema,
     expectedRevision: integer('Current revision.'),
   },
   remove_statement: {
@@ -353,12 +381,18 @@ const knowledgeProperties: Record<string, Record<string, unknown>> = {
     entityId: string('Entity ID.'),
     statementId: string('Statement ID.'),
     rank: { type: 'string', enum: ['preferred', 'normal', 'deprecated'] },
+    text: authoredText(
+      'Explicit authored text for the ranked statement revision.',
+    ),
     expectedRevision: integer('Current revision.'),
   },
   add_qualifier: {
     entityId: string('Entity ID.'),
     statementId: string('Statement ID.'),
     snak: object('Typed qualifier snak.'),
+    text: authoredText(
+      'Explicit authored text for the qualified statement revision.',
+    ),
     expectedRevision: integer('Current revision.'),
   },
   remove_qualifier: {
@@ -366,18 +400,27 @@ const knowledgeProperties: Record<string, Record<string, unknown>> = {
     statementId: string('Statement ID.'),
     property: string('Property ID.'),
     ordinal: integer('Zero-based ordinal.'),
+    text: authoredText(
+      'Explicit authored text for the statement revision after qualifier removal.',
+    ),
     expectedRevision: integer('Current revision.'),
   },
   add_reference: {
     entityId: string('Entity ID.'),
     statementId: string('Statement ID.'),
     reference: object('Complete reference.'),
+    text: authoredText(
+      'Explicit authored text for the referenced statement revision.',
+    ),
     expectedRevision: integer('Current revision.'),
   },
   remove_reference: {
     entityId: string('Entity ID.'),
     statementId: string('Statement ID.'),
     hash: string('Reference hash.'),
+    text: authoredText(
+      'Explicit authored text for the statement revision after reference removal.',
+    ),
     expectedRevision: integer('Current revision.'),
   },
   export_entity_json: { entityId: string('Entity ID.') },
@@ -402,17 +445,42 @@ const required: Record<string, string[]> = {
     'expectedRevision',
   ],
   remove_statement: ['entityId', 'statementId', 'expectedRevision'],
-  set_statement_rank: ['entityId', 'statementId', 'rank', 'expectedRevision'],
-  add_qualifier: ['entityId', 'statementId', 'snak', 'expectedRevision'],
+  set_statement_rank: [
+    'entityId',
+    'statementId',
+    'rank',
+    'text',
+    'expectedRevision',
+  ],
+  add_qualifier: [
+    'entityId',
+    'statementId',
+    'snak',
+    'text',
+    'expectedRevision',
+  ],
   remove_qualifier: [
     'entityId',
     'statementId',
     'property',
     'ordinal',
+    'text',
     'expectedRevision',
   ],
-  add_reference: ['entityId', 'statementId', 'reference', 'expectedRevision'],
-  remove_reference: ['entityId', 'statementId', 'hash', 'expectedRevision'],
+  add_reference: [
+    'entityId',
+    'statementId',
+    'reference',
+    'text',
+    'expectedRevision',
+  ],
+  remove_reference: [
+    'entityId',
+    'statementId',
+    'hash',
+    'text',
+    'expectedRevision',
+  ],
   export_entity_json: ['entityId'],
 };
 

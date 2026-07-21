@@ -5,6 +5,20 @@ import type {
 } from '../protocol/knowledge.js';
 import type { ObserveWorkshop } from './observability.js';
 import { observed } from './observability.js';
+import type {
+  TaprootCreatePropertyInput,
+  TaprootEntityId,
+  TaprootRepositoryLike,
+  TaprootReference,
+  TaprootSitelink,
+  TaprootSnak,
+  TaprootStatement,
+} from './taproot-contract.js';
+
+export type {
+  TaprootRepositoryLike,
+  TaprootStatement,
+} from './taproot-contract.js';
 
 export const KNOWLEDGE_TOOL_NAMES = [
   'search_entities',
@@ -30,29 +44,6 @@ export const KNOWLEDGE_TOOL_NAMES = [
 ] as const;
 
 export type KnowledgeToolName = (typeof KNOWLEDGE_TOOL_NAMES)[number];
-
-type AnyFunction = (...args: unknown[]) => Promise<unknown>;
-
-export interface TaprootRepositoryLike {
-  searchEntitiesPage: AnyFunction;
-  getEntity: AnyFunction;
-  createItem: AnyFunction;
-  createProperty: AnyFunction;
-  setLabel: AnyFunction;
-  setDescription: AnyFunction;
-  addAlias: AnyFunction;
-  removeAlias: AnyFunction;
-  setSitelink: AnyFunction;
-  removeSitelink: AnyFunction;
-  addStatement: AnyFunction;
-  replaceStatement: AnyFunction;
-  removeStatement: AnyFunction;
-  setStatementRank: AnyFunction;
-  addQualifier: AnyFunction;
-  removeQualifier: AnyFunction;
-  addReference: AnyFunction;
-  removeReference: AnyFunction;
-}
 
 export interface TaprootKnowledgeOptions {
   observe?: ObserveWorkshop;
@@ -97,7 +88,7 @@ async function invoke(
   const metadata = {
     attribution: {
       id: context.principalId,
-      kind: 'agent',
+      kind: 'agent' as const,
       tool: '@gnolith/workshop',
     },
     ...(context.requestId ? { requestId: context.requestId } : {}),
@@ -106,7 +97,7 @@ async function invoke(
     expectedRevision: integer(input.expectedRevision, 'expectedRevision'),
     ...metadata,
   });
-  const id = () => text(input.entityId, 'entityId');
+  const id = () => entityId(input.entityId, 'entityId');
 
   switch (call.name as KnowledgeToolName) {
     case 'search_entities':
@@ -125,14 +116,21 @@ async function invoke(
       }
       return Promise.all(
         input.entityIds.map((entityId) =>
-          repository.getEntity(text(entityId, 'entityIds[]') as never),
+          repository.getEntity(entityIdValue(entityId, 'entityIds[]')),
         ),
       );
     }
     case 'create_item':
-      return repository.createItem({ ...input, ...metadata });
+      validateInitialClaims(input.claims);
+      return repository.createItem({
+        ...input,
+        ...metadata,
+      });
     case 'create_property':
-      return repository.createProperty({ ...input, ...metadata });
+      return repository.createProperty({
+        ...input,
+        ...metadata,
+      } as unknown as TaprootCreatePropertyInput);
     case 'set_label':
       return repository.setLabel(
         id(),
@@ -163,32 +161,36 @@ async function invoke(
       );
     case 'add_sitelink':
       return repository.setSitelink(
-        id(),
+        itemId(input.entityId, 'entityId'),
         text(input.site, 'site'),
-        object(input.sitelink, 'sitelink'),
+        object(input.sitelink, 'sitelink') as unknown as TaprootSitelink,
         edit(),
       );
     case 'remove_sitelink':
-      return repository.removeSitelink(id(), text(input.site, 'site'), edit());
-    case 'add_statement':
-      return annotateStatements(
-        repository.addStatement(
-          id(),
-          object(input.statement, 'statement'),
-          edit(),
-        ),
-        statementId(input.statement),
+      return repository.removeSitelink(
+        itemId(input.entityId, 'entityId'),
+        text(input.site, 'site'),
+        edit(),
       );
-    case 'replace_statement':
+    case 'add_statement': {
+      const statement = authoredStatement(input.statement, 'statement');
+      return annotateStatements(
+        repository.addStatement(id(), statement, edit()),
+        statementId(statement),
+      );
+    }
+    case 'replace_statement': {
+      const statement = authoredStatement(input.statement, 'statement');
       return annotateStatements(
         repository.replaceStatement(
           id(),
           text(input.statementId, 'statementId'),
-          object(input.statement, 'statement'),
+          statement,
           edit(),
         ),
         text(input.statementId, 'statementId'),
       );
+    }
     case 'remove_statement':
       return annotateStatements(
         repository.removeStatement(
@@ -203,7 +205,8 @@ async function invoke(
         repository.setStatementRank(
           id(),
           text(input.statementId, 'statementId'),
-          text(input.rank, 'rank'),
+          statementRank(input.rank),
+          authoredText(input.text, 'text'),
           edit(),
         ),
         text(input.statementId, 'statementId'),
@@ -213,7 +216,8 @@ async function invoke(
         repository.addQualifier(
           id(),
           text(input.statementId, 'statementId'),
-          object(input.snak, 'snak'),
+          object(input.snak, 'snak') as unknown as TaprootSnak,
+          authoredText(input.text, 'text'),
           edit(),
         ),
         text(input.statementId, 'statementId'),
@@ -223,8 +227,9 @@ async function invoke(
         repository.removeQualifier(
           id(),
           text(input.statementId, 'statementId'),
-          text(input.property, 'property'),
+          propertyId(input.property, 'property'),
           integer(input.ordinal, 'ordinal'),
+          authoredText(input.text, 'text'),
           edit(),
         ),
         text(input.statementId, 'statementId'),
@@ -234,7 +239,8 @@ async function invoke(
         repository.addReference(
           id(),
           text(input.statementId, 'statementId'),
-          object(input.reference, 'reference'),
+          object(input.reference, 'reference') as unknown as TaprootReference,
+          authoredText(input.text, 'text'),
           edit(),
         ),
         text(input.statementId, 'statementId'),
@@ -245,6 +251,7 @@ async function invoke(
           id(),
           text(input.statementId, 'statementId'),
           text(input.hash, 'hash'),
+          authoredText(input.text, 'text'),
           edit(),
         ),
         text(input.statementId, 'statementId'),
@@ -264,6 +271,73 @@ function statementId(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const id = (value as Record<string, unknown>).id;
   return typeof id === 'string' && id.trim() ? id.trim() : undefined;
+}
+
+function entityId(value: unknown, field: string): TaprootEntityId {
+  return entityIdValue(value, field);
+}
+
+function entityIdValue(value: unknown, field: string): TaprootEntityId {
+  const candidate = text(value, field);
+  if (!/^[QP]\d+$/u.test(candidate)) {
+    throw invalid(`${field} must be a Q or P entity ID`, field);
+  }
+  return candidate as TaprootEntityId;
+}
+
+function itemId(value: unknown, field: string): `Q${number}` {
+  const candidate = text(value, field);
+  if (!/^Q\d+$/u.test(candidate)) {
+    throw invalid(`${field} must be a Q item ID`, field);
+  }
+  return candidate as `Q${number}`;
+}
+
+function propertyId(value: unknown, field: string): `P${number}` {
+  const candidate = text(value, field);
+  if (!/^P\d+$/u.test(candidate)) {
+    throw invalid(`${field} must be a P property ID`, field);
+  }
+  return candidate as `P${number}`;
+}
+
+function statementRank(value: unknown): 'preferred' | 'normal' | 'deprecated' {
+  if (value !== 'preferred' && value !== 'normal' && value !== 'deprecated') {
+    throw invalid('rank must be preferred, normal, or deprecated', 'rank');
+  }
+  return value;
+}
+
+function authoredStatement(value: unknown, field: string): TaprootStatement {
+  const statement = object(value, field);
+  authoredText(statement.text, `${field}.text`);
+  return statement as unknown as TaprootStatement;
+}
+
+function validateInitialClaims(value: unknown): void {
+  if (value === undefined) return;
+  const claims = object(value, 'claims');
+  for (const [property, statements] of Object.entries(claims)) {
+    if (!Array.isArray(statements)) {
+      throw invalid(
+        `claims.${property} must be an array`,
+        `claims.${property}`,
+      );
+    }
+    statements.forEach((statement, index) =>
+      authoredStatement(statement, `claims.${property}[${index}]`),
+    );
+  }
+}
+
+function authoredText(value: unknown, field: string): string {
+  if (
+    typeof value !== 'string' ||
+    !value.replace(/[\p{White_Space}\p{Cf}]/gu, '')
+  ) {
+    throw invalid(`${field} is required`, field);
+  }
+  return value;
 }
 
 async function annotateStatements(

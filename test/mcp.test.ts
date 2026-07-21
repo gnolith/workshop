@@ -39,6 +39,35 @@ describe('Streamable HTTP MCP', () => {
       type: 'integer',
       minimum: 1,
     });
+    for (const name of [
+      'set_statement_rank',
+      'add_qualifier',
+      'remove_qualifier',
+      'add_reference',
+      'remove_reference',
+    ]) {
+      const definition = server.tools.find((tool) => tool.name === name);
+      expect(definition?.inputSchema.required).toContain('text');
+      expect(definition?.inputSchema.properties.text).toMatchObject({
+        type: 'string',
+        minLength: 1,
+        pattern: '\\S',
+      });
+    }
+    expect(
+      server.tools.find((tool) => tool.name === 'remove_statement')?.inputSchema
+        .required,
+    ).not.toContain('text');
+    for (const name of ['add_statement', 'replace_statement']) {
+      const schema = server.tools.find((tool) => tool.name === name)
+        ?.inputSchema.properties.statement as { required?: string[] };
+      expect(schema.required).toContain('text');
+    }
+    const claims = server.tools.find((tool) => tool.name === 'create_item')
+      ?.inputSchema.properties.claims as {
+      additionalProperties?: { items?: { required?: string[] } };
+    };
+    expect(claims.additionalProperties?.items?.required).toContain('text');
   });
 
   it('interoperates with the official MCP TypeScript client', async () => {
