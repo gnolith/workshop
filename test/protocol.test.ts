@@ -10,6 +10,7 @@ const base: Task = {
   contextQueries: [],
   memorySlugs: [],
   claimed: false,
+  revision: 1,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
@@ -75,5 +76,9 @@ describe('protocol and validation', () => {
     expect(new Headers(captured?.init?.headers).get('if-match')).toBe(
       base.updatedAt,
     );
+    await client.tasks.archive(base.id, base.revision);
+    expect(
+      new Headers(captured?.init?.headers).get('x-workshop-revision'),
+    ).toBe('1');
   });
 });

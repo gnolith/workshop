@@ -20,6 +20,11 @@ const integer = (description: string) => ({
   minimum: 0,
   description,
 });
+const positiveInteger = (description: string) => ({
+  type: 'integer',
+  minimum: 1,
+  description,
+});
 const object = (description: string) => ({
   type: 'object',
   description,
@@ -127,14 +132,15 @@ const taskTools = [
   tool(
     'update_task',
     'Update task',
-    'Optimistically update an active task. Supply the exact updatedAt value previously read; completed or archived tasks cannot be reopened.',
+    'Optimistically update an active task. Supply expectedRevision (preferred) or the legacy exact updatedAt value; completed or archived tasks cannot be reopened.',
     'task-write',
     {
       id: string('Task ID.'),
+      expectedRevision: positiveInteger('Exact current task revision.'),
       expectedUpdatedAt: string('Exact current task updatedAt timestamp.'),
       ...taskInputProperties,
     },
-    ['id', 'expectedUpdatedAt'],
+    ['id'],
   ),
   tool(
     'archive_task',
@@ -143,9 +149,10 @@ const taskTools = [
     'task-write',
     {
       id: string('Task ID.'),
+      expectedRevision: positiveInteger('Exact current task revision.'),
       expectedUpdatedAt: string('Exact current task updatedAt timestamp.'),
     },
-    ['id', 'expectedUpdatedAt'],
+    ['id'],
   ),
   tool(
     'claim_task',
@@ -194,6 +201,9 @@ const memoryTools = [
       slug: string('Lowercase hyphenated slug.'),
       description: string('Purpose of this guidance.'),
       content: string('Reusable guidance.'),
+      expectedRevision: positiveInteger(
+        'Optional exact current memory revision.',
+      ),
       expectedUpdatedAt: string('Optional optimistic concurrency timestamp.'),
     },
     ['slug', 'description', 'content'],

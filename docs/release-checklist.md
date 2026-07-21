@@ -13,9 +13,9 @@
    compatibility flags.
 7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-8. Commit the final tree and create the annotated `v0.1.1` tag with explicit
+8. Commit the final tree and create the annotated `v0.2.2` tag with explicit
    authorization, then regenerate provenance from that clean tagged checkout.
-9. Run `npm run release:check -- v0.1.1`; it must verify exact archive contents,
+9. Run `npm run release:check -- v0.2.2`; it must verify exact archive contents,
    source identity, version uniqueness, the clean commit/tree, and annotated tag
    without repacking.
 10. Persist the provenance and versioned schema as non-replaceable GitHub
@@ -24,7 +24,7 @@
 
 ## Excluded from Workshop release acceptance
 
-Workshop release acceptance excludes four-package Site composition,
+Workshop release acceptance excludes complete Gnolith Site composition,
 infrastructure provisioning, Site migration application, host identity and
 secrets, deployment configuration, live HTTP/browser/MCP/Codex probes, and final
 Site approval. The Codex agent creating the Site owns those checks.

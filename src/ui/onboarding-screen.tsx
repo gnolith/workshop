@@ -91,11 +91,19 @@ export function WorkshopOnboardingScreen({
           )}
         </section>
       ) : null}
-      {result ? (
+      {result?.state === 'completed' ? (
         <p className="workshop-success" role="status">
           Seed {result.key} applied: {result.entities.length} entities,{' '}
           {result.memories.length} memories, and {result.tasks.length} tasks.
         </p>
+      ) : result ? (
+        <div className="workshop-notice" role="status">
+          <p>
+            Seed {result.key} is {result.state.replaceAll('_', ' ')}:{' '}
+            {result.completedSteps} of {result.totalSteps} steps completed.
+          </p>
+          {result.failure ? <p>{result.failure.message}</p> : null}
+        </div>
       ) : null}
     </section>
   );

@@ -2,6 +2,20 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.2.2] - Unreleased
+
+### Added
+
+- Transport-neutral process-local core and authorized MCP tool dispatcher.
+- Portable Workshop migration runner and D1/node:sqlite behavioral parity.
+- Monotonic task and memory revisions with legacy timestamp compatibility.
+- Durable, leased, resumable onboarding checkpoints with replay-safe writers.
+
+### Changed
+
+- Health exposes neutral `checks.persistence` while retaining `checks.d1`.
+- HTTP/Site runtime remains source-compatible over the new core seam.
+
 ## [0.1.1] - 2026-07-20
 
 ### Changed

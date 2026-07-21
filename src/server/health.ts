@@ -12,6 +12,9 @@ export interface WorkshopHealth {
   schemaVersion: number | null;
   workshopVersion: string;
   checks: {
+    /** Runtime-neutral persistence health. */
+    persistence: boolean;
+    /** @deprecated Use `persistence`. Retained for D1-host compatibility. */
     d1: boolean;
     schema: boolean;
     taproot: boolean;
@@ -97,13 +100,22 @@ export class HealthService {
     ]);
     const compatibility =
       installedPackageVersion !== null &&
-      /^0\.1\./u.test(installedPackageVersion) &&
+      /^0\.2\./u.test(installedPackageVersion) &&
       hostCompatibility;
-    const checks = { d1, schema, taproot, diamond, mcp, compatibility };
+    const persistence = d1;
+    const checks = {
+      persistence,
+      d1: persistence,
+      schema,
+      taproot,
+      diamond,
+      mcp,
+      compatibility,
+    };
     return {
       status: Object.values(checks).every(Boolean) ? 'ok' : 'degraded',
       schemaVersion,
-      workshopVersion: '0.1.1',
+      workshopVersion: '0.2.2',
       checks,
       tables,
       indexes,

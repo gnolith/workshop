@@ -11,18 +11,38 @@ packet snapshots, or a background coordinator.
 
 ## Runtime surfaces
 
-| Import                         | Runtime        | Purpose                                                  |
-| ------------------------------ | -------------- | -------------------------------------------------------- |
-| `@gnolith/workshop`            | any            | Package identity and safe shared types                   |
-| `@gnolith/workshop/protocol`   | browser/Worker | Models, errors, and injectable HTTP client               |
-| `@gnolith/workshop/server`     | Worker         | D1 services, SPARQL/Taproot adapters, health, onboarding |
-| `@gnolith/workshop/mcp`        | Worker         | MCP tool schemas and stateless server                    |
-| `@gnolith/workshop/site`       | Worker         | Thin App Router-compatible route factories               |
-| `@gnolith/workshop/ui`         | browser        | React 19 components and `workshopPlugin`                 |
-| `@gnolith/workshop/migrations` | installer      | Embedded canonical migration manifest                    |
-| `@gnolith/workshop/styles.css` | browser        | Workshop-specific styles                                 |
+| Import                         | Runtime        | Purpose                                                 |
+| ------------------------------ | -------------- | ------------------------------------------------------- |
+| `@gnolith/workshop`            | any            | Package identity and safe shared types                  |
+| `@gnolith/workshop/core`       | any            | Process-local services and authorized tool dispatch     |
+| `@gnolith/workshop/protocol`   | browser/Worker | Models, errors, and injectable HTTP client              |
+| `@gnolith/workshop/server`     | Worker/process | Persistence services, health, onboarding, HTTP adapters |
+| `@gnolith/workshop/mcp`        | any/Worker     | Neutral tool dispatcher and stateless HTTP MCP server   |
+| `@gnolith/workshop/site`       | Worker         | Thin App Router-compatible route factories              |
+| `@gnolith/workshop/ui`         | browser        | React 19 components and `workshopPlugin`                |
+| `@gnolith/workshop/migrations` | installer      | Embedded canonical migration manifest                   |
+| `@gnolith/workshop/styles.css` | browser        | Workshop-specific styles                                |
 
 The root export intentionally does not import all runtimes.
+
+## Process-local integration
+
+Core services run directly in a process without HTTP, a UI, or a listening
+server. The host injects one structural SQLite persistence capability plus its
+SPARQL and knowledge services:
+
+```ts
+import { createWorkshopCore } from '@gnolith/workshop/core';
+
+const workshop = createWorkshopCore({
+  persistence,
+  executeSparql,
+  knowledge,
+});
+```
+
+Workshop owns its exact migrations and service behavior. Seedbed owns database
+paths, adapter lifecycle, stdio/CLI wiring, Docker, and package assembly.
 
 ## Install
 
@@ -69,15 +89,17 @@ export const GET = handler;
 export const POST = handler;
 ```
 
-Consumers apply migrations before constructing the runtime. Runtime construction
-never creates tables. `workshopMigrations` provides the canonical ordered SQL
-and checksums; the consuming host decides how to materialize and apply it.
+Consumers apply migrations explicitly before constructing the runtime. Runtime
+construction never creates tables. `workshopMigrations` provides canonical SQL
+and checksums; `applyWorkshopMigrations(persistence)` applies only
+Workshop-owned schema through Diamond's shared namespaced checksum ledger when
+the host chooses to initialize or migrate.
 
 ## Core behavior
 
 - Task creation validates every field, rejects SPARQL writes, dry-runs every
   context query, and verifies all memory references before inserting anything.
-- `claim_task` is one conditional D1 update. Concurrent callers cannot both win.
+- `claim_task` is one conditional SQLite update. Concurrent callers cannot both win.
 - Completion is one conditional update and accepts negative or inconclusive
   nonempty results.
 - Task packets execute current context queries and resolve current memories on

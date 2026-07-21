@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { Miniflare } from 'miniflare';
+import { workshopMigrations } from '../dist/migrations.js';
 
 const scriptPath = '.wrangler/package-runtime-canary/worker.js';
 const miniflare = new Miniflare({
@@ -15,9 +15,10 @@ const miniflare = new Miniflare({
 
 try {
   const db = await miniflare.getD1Database('DB');
-  const migration = readFileSync('migrations/0001_workshop.sql', 'utf8');
-  for (const statement of migration.split(/;\s*(?:\r?\n|$)/u)) {
-    if (statement.trim()) await db.prepare(statement).run();
+  for (const migration of workshopMigrations) {
+    for (const statement of migration.sql.split(/;\s*(?:\r?\n|$)/u)) {
+      if (statement.trim()) await db.prepare(statement).run();
+    }
   }
 
   const call = async (id, method, params = {}) => {

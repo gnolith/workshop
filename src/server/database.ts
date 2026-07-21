@@ -18,3 +18,6 @@ export interface D1DatabaseLike {
   ): Promise<Array<D1ResultLike<T>>>;
   exec?(sql: string): Promise<unknown>;
 }
+
+/** Runtime-neutral persistence port implemented by D1 and SQLite adapters. */
+export type WorkshopPersistence = D1DatabaseLike;

@@ -1,9 +1,9 @@
 # Compatibility
 
-Workshop 0.1.x targets:
+Workshop 0.2.x targets:
 
-- Diamond `>=0.3.2 <0.4.0` through the injected query service
-- Taproot `>=0.1.0 <0.2.0`
+- Diamond `>=0.4.0 <0.5.0` through injected SQLite/query services
+- Taproot `>=0.1.0 <0.3.0`
 - Waystone plugin contract `>=0.1.0 <0.2.0`
 - React `>=19 <20`
 - TypeScript `>=5.9 <6`

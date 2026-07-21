@@ -42,7 +42,7 @@ export interface WorkshopClient {
     ): Promise<Task>;
     archive(
       id: string,
-      expectedUpdatedAt: string,
+      expectedRevision: number | string,
       options?: RequestOptions,
     ): Promise<Task>;
     claim(id: string, options?: RequestOptions): Promise<Task>;
@@ -153,10 +153,13 @@ export function createWorkshopClient(
           body: JSON.stringify(input),
           signal: requestOptions?.signal,
         }),
-      archive: (id, expectedUpdatedAt, requestOptions) =>
+      archive: (id, expectedRevision, requestOptions) =>
         request(`/api/workshop/tasks/${encodeURIComponent(id)}`, {
           method: 'DELETE',
-          headers: { 'if-match': expectedUpdatedAt },
+          headers:
+            typeof expectedRevision === 'number'
+              ? { 'x-workshop-revision': String(expectedRevision) }
+              : { 'if-match': expectedRevision },
           signal: requestOptions?.signal,
         }),
       claim: (id, requestOptions) =>

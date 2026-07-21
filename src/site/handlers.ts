@@ -47,8 +47,11 @@ export function createTaskHandler(
     }
     if (request.method === 'DELETE') {
       const actor = authorize(principal, 'task-write');
+      const revision = request.headers.get('x-workshop-revision');
       return runtime.tasks.archive(id, {
-        expectedUpdatedAt: requiredHeader(request, 'if-match'),
+        ...(revision === null
+          ? { expectedUpdatedAt: requiredHeader(request, 'if-match') }
+          : { expectedRevision: Number(revision) }),
         principalId: actor.id,
         administrative: actor.capabilities.includes('admin'),
       });
@@ -420,7 +423,7 @@ function preflight(request: Request, runtime: WorkshopRuntime): Response {
         'access-control-allow-methods':
           'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'access-control-allow-headers':
-          'Authorization, Content-Type, If-Match, X-Request-Id',
+          'Authorization, Content-Type, If-Match, X-Workshop-Revision, X-Request-Id',
       },
     });
   } catch (error) {

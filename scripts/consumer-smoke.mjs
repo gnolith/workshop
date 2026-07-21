@@ -53,13 +53,15 @@ writeFileSync(
   join(root, 'smoke.mjs'),
   `
     import { workshopPackage } from '@gnolith/workshop';
+    import { createWorkshopCore, createWorkshopToolDispatcher } from '@gnolith/workshop/core';
     import { createWorkshopClient, taskState } from '@gnolith/workshop/protocol';
     import { createWorkshopRuntime, TaskService } from '@gnolith/workshop/server';
     import { createWorkshopMcpServer, workshopTools } from '@gnolith/workshop/mcp';
     import { createWorkshopMcpHandler } from '@gnolith/workshop/site';
     import { workshopMigrations } from '@gnolith/workshop/migrations';
     import { createWorkshopPlugin, workshopPlugin, TaskList, WorkshopTasksScreen } from '@gnolith/workshop/ui';
-    const values = [workshopPackage, createWorkshopClient, taskState, createWorkshopRuntime,
+    const values = [workshopPackage, createWorkshopCore, createWorkshopToolDispatcher,
+      createWorkshopClient, taskState, createWorkshopRuntime,
       TaskService, createWorkshopMcpServer, workshopTools, createWorkshopMcpHandler,
       workshopMigrations, createWorkshopPlugin, workshopPlugin, TaskList, WorkshopTasksScreen];
     if (values.some((value) => value === undefined)) throw new Error('Public export missing');
@@ -72,6 +74,7 @@ execFileSync(process.execPath, [join(root, 'smoke.mjs')], {
 const packageRoot = join(root, 'node_modules', ...source.name.split('/'));
 for (const path of [
   'dist/index.d.ts',
+  'dist/core.d.ts',
   'dist/protocol.d.ts',
   'dist/server.d.ts',
   'dist/mcp.d.ts',
@@ -80,6 +83,8 @@ for (const path of [
   'dist/migrations.d.ts',
   'dist/styles.css',
   'migrations/0001_workshop.sql',
+  'migrations/0002_revisions.sql',
+  'migrations/0003_resumable_onboarding.sql',
   'SECURITY.md',
 ]) {
   if (!existsSync(join(packageRoot, path))) {

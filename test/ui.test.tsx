@@ -19,6 +19,7 @@ const task: Task = {
   contextQueries: [],
   memorySlugs: [],
   claimed: true,
+  revision: 1,
   claimedAt: '2026-07-20T12:00:00.000Z',
   createdAt: '2026-07-20T12:00:00.000Z',
   updatedAt: '2026-07-20T12:00:00.000Z',

@@ -11,7 +11,8 @@ sessions.
 `list_tasks`, `search_tasks`, `get_task_packet`, `create_task`, `update_task`,
 `archive_task`, `claim_task`, `complete_task`.
 
-`update_task` and `archive_task` require the exact current `expectedUpdatedAt`
+`update_task` and `archive_task` require `expectedRevision` (preferred) or the
+legacy exact current `expectedUpdatedAt`
 timestamp. This makes concurrent complete/archive transitions deterministic.
 
 ## Memories

@@ -41,7 +41,11 @@ interface TaskRow {
   result: string | null;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
+
+const NEXT_UPDATED_AT =
+  "CASE WHEN ? > updated_at THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END";
 
 export interface TaskServiceOptions {
   limits?: Partial<WorkshopLimits>;
@@ -206,7 +210,7 @@ export class TaskService {
         'Completed or archived tasks cannot be reopened or edited',
       );
     }
-    const expected = isoDate(input.expectedUpdatedAt, 'expectedUpdatedAt');
+    const expected = revisionPrecondition(input);
     const description =
       input.description === undefined
         ? current.description
@@ -241,8 +245,9 @@ export class TaskService {
       const row = await this.db
         .prepare(
           `UPDATE workshop_tasks
-           SET description = ?, role = ?, prompt = ?, context_queries = ?, memory_slugs = ?, updated_at = ?
-           WHERE id = ? AND updated_at = ? AND completed_at IS NULL AND archived_at IS NULL
+           SET description = ?, role = ?, prompt = ?, context_queries = ?, memory_slugs = ?,
+               revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
+           WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
            RETURNING *`,
         )
         .bind(
@@ -252,8 +257,9 @@ export class TaskService {
           JSON.stringify(queries),
           JSON.stringify(slugs),
           now,
+          now,
           id,
-          expected,
+          expected.value,
         )
         .first<TaskRow>();
       if (!row) {
@@ -269,21 +275,23 @@ export class TaskService {
   async archive(
     id: string,
     options: {
-      expectedUpdatedAt: string;
+      expectedRevision?: number;
+      expectedUpdatedAt?: string;
       administrative?: boolean;
       principalId?: string;
     },
   ): Promise<Task> {
-    const expected = isoDate(options.expectedUpdatedAt, 'expectedUpdatedAt');
+    const expected = revisionPrecondition(options);
     const now = this.#clock().toISOString();
     return this.#mutation('task.archive', options.principalId, id, async () => {
       const row = await this.db
         .prepare(
-          `UPDATE workshop_tasks SET archived_at = ?, claimed = 0, claimed_at = NULL, updated_at = ?
-           WHERE id = ? AND updated_at = ? AND completed_at IS NULL AND archived_at IS NULL
+          `UPDATE workshop_tasks SET archived_at = ?, claimed = 0, claimed_at = NULL,
+             revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
+           WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
              AND (claimed = 0 OR ? = 1) RETURNING *`,
         )
-        .bind(now, now, id, expected, options.administrative ? 1 : 0)
+        .bind(now, now, now, id, expected.value, options.administrative ? 1 : 0)
         .first<TaskRow>();
       if (!row) {
         const current = await this.#getRow(id);
@@ -295,7 +303,7 @@ export class TaskService {
             ? `Task ${id} is already archived`
             : current.completed_at
               ? `Task ${id} is already completed`
-              : current.updated_at !== expected
+              : !matchesRevisionPrecondition(current, expected)
                 ? `Task ${id} changed state or was updated since it was read`
                 : 'A claimed task requires administrative authorization to archive',
         );
@@ -309,10 +317,11 @@ export class TaskService {
     return this.#mutation('task.claim', principalId, id, async () => {
       const row = await this.db
         .prepare(
-          `UPDATE workshop_tasks SET claimed = 1, claimed_at = ?, updated_at = ?
+          `UPDATE workshop_tasks SET claimed = 1, claimed_at = ?,
+             revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
            WHERE id = ? AND claimed = 0 AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
         )
-        .bind(now, now, id)
+        .bind(now, now, now, id)
         .first<TaskRow>();
       if (!row) {
         const current = await this.#getRow(id);
@@ -342,10 +351,11 @@ export class TaskService {
       const row = await this.db
         .prepare(
           `UPDATE workshop_tasks
-           SET claimed = 0, claimed_at = NULL, completed_at = ?, result = ?, updated_at = ?
+           SET claimed = 0, claimed_at = NULL, completed_at = ?, result = ?,
+               revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
            WHERE id = ? AND claimed = 1 AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
         )
-        .bind(now, result, now, id)
+        .bind(now, result, now, now, id)
         .first<TaskRow>();
       if (!row) {
         const current = await this.#getRow(id);
@@ -370,10 +380,11 @@ export class TaskService {
     return this.#mutation('task.reset-claim', principalId, id, async () => {
       const row = await this.db
         .prepare(
-          `UPDATE workshop_tasks SET claimed = 0, claimed_at = NULL, updated_at = ?
+          `UPDATE workshop_tasks SET claimed = 0, claimed_at = NULL,
+             revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
            WHERE id = ? AND claimed = 1 AND claimed_at < ? AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
         )
-        .bind(now, id, cutoff)
+        .bind(now, now, id, cutoff)
         .first<TaskRow>();
       if (!row) {
         throw new WorkshopError(
@@ -512,7 +523,45 @@ function toTask(row: TaskRow): Task {
     ...(row.result !== null ? { result: row.result } : {}),
     createdAt: normalizeDate(row.created_at),
     updatedAt: normalizeDate(row.updated_at),
+    revision: row.revision,
   };
+}
+
+interface ResolvedRevisionPrecondition {
+  column: 'revision' | 'updated_at';
+  value: number | string;
+}
+
+function revisionPrecondition(input: {
+  expectedRevision?: number | undefined;
+  expectedUpdatedAt?: string | undefined;
+}): ResolvedRevisionPrecondition {
+  const expectedUpdatedAt =
+    input.expectedUpdatedAt === undefined
+      ? undefined
+      : isoDate(input.expectedUpdatedAt, 'expectedUpdatedAt');
+  if (input.expectedRevision !== undefined) {
+    if (
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 1
+    ) {
+      throw validation('expectedRevision must be a positive safe integer');
+    }
+    return { column: 'revision', value: input.expectedRevision };
+  }
+  if (expectedUpdatedAt !== undefined) {
+    return { column: 'updated_at', value: expectedUpdatedAt };
+  }
+  throw validation('expectedRevision or expectedUpdatedAt is required');
+}
+
+function matchesRevisionPrecondition(
+  row: TaskRow,
+  expected: ResolvedRevisionPrecondition,
+): boolean {
+  return expected.column === 'revision'
+    ? row.revision === expected.value
+    : row.updated_at === expected.value;
 }
 
 function normalizeDate(value: string): string {

@@ -28,6 +28,7 @@ const task: Task = {
   contextQueries: [],
   memorySlugs: [],
   claimed: false,
+  revision: 1,
   createdAt: now,
   updatedAt: now,
 };
@@ -35,6 +36,7 @@ const memory: Memory = {
   slug: 'citation-policy',
   description: 'Citation rules',
   content: 'Cite the original record.',
+  revision: 1,
   createdAt: now,
   updatedAt: now,
 };
@@ -136,6 +138,19 @@ describe('configured Waystone screens', () => {
     const preview = vi.fn(async () => plan);
     const apply = vi.fn(async () => ({
       key: plan.key,
+      state: 'completed' as const,
+      retryable: false,
+      completedSteps: 1,
+      totalSteps: 1,
+      steps: [
+        {
+          key: `onboarding:${plan.key}:entity:0`,
+          ordinal: 0,
+          kind: 'entity' as const,
+          state: 'completed' as const,
+          attempts: 1,
+        },
+      ],
       entities: [{}],
       memories: [],
       tasks: [],
@@ -225,6 +240,7 @@ function mockClient(): WorkshopClient {
         slug,
         description: input.description,
         content: input.content,
+        revision: 1,
         createdAt: now,
         updatedAt: now,
       })),
