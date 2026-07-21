@@ -344,10 +344,7 @@ jobs:
           NODE
       - name: Publish verified package
         if: steps.registry-state.outputs.exists == 'false'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
-          PACKAGE_ARCHIVE: ${{ steps.release-boundary.outputs.archive }}
-        run: npm publish "$PACKAGE_ARCHIVE" --ignore-scripts --access public --provenance
+        run: npm publish "${{ steps.release-boundary.outputs.archive }}" --ignore-scripts --access public --provenance
 
   persist-provenance:
     if: github.repository == 'gnolith/workshop'

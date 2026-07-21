@@ -31,7 +31,11 @@ const packageInputs = [
   'src',
   'migrations',
   'docs',
-  'scripts',
+  // Release verification scripts do not affect packed bytes. Track only the
+  // scripts that can change build output so release-policy fixes do not force
+  // an otherwise content-identical package version bump.
+  'scripts/clean.mjs',
+  'scripts/copy-assets.mjs',
   'README.md',
   'CHANGELOG.md',
   'COMPATIBILITY.md',
@@ -59,8 +63,38 @@ export function artifactPaths(manifest = readManifest()) {
   };
 }
 
-export function assertVersionIsUnambiguous(manifest = readManifest()) {
-  const commits = git(['log', '--format=%H', '--all', '--', 'package.json'])
+export function assertVersionIsUnambiguous(
+  manifest = readManifest(),
+  { ref = 'HEAD', requireHead = false } = {},
+) {
+  const authoritativeCommit = git(['rev-parse', '--verify', `${ref}^{commit}`]);
+  if (requireHead) {
+    assert.equal(
+      git(['rev-parse', 'HEAD']),
+      authoritativeCommit,
+      `Authoritative release ref ${ref} must be checked out`,
+    );
+  }
+  const authoritativeManifest = JSON.parse(
+    git(['show', `${authoritativeCommit}:package.json`]),
+  );
+  assert.equal(
+    authoritativeManifest.name,
+    manifest.name,
+    `Authoritative ref ${ref} has a different package name`,
+  );
+  assert.equal(
+    authoritativeManifest.version,
+    manifest.version,
+    `Authoritative ref ${ref} has a different package version`,
+  );
+  const commits = git([
+    'log',
+    '--format=%H',
+    authoritativeCommit,
+    '--',
+    'package.json',
+  ])
     .split(/\r?\n/u)
     .filter(Boolean);
   for (const commit of commits) {
@@ -73,13 +107,13 @@ export function assertVersionIsUnambiguous(manifest = readManifest()) {
     if (historical.version !== manifest.version) continue;
     const comparison = spawnSync(
       'git',
-      ['diff', '--quiet', commit, '--', ...packageInputs],
+      ['diff', '--quiet', commit, authoritativeCommit, '--', ...packageInputs],
       { cwd: projectRoot, stdio: 'ignore' },
     );
     assert.notEqual(
       comparison.status,
       1,
-      `Package version ${manifest.version} already exists at ${commit.slice(0, 12)} with different artifact inputs; bump the version`,
+      `Package version ${manifest.version} already exists at ${commit.slice(0, 12)} on authoritative history ${ref} with different artifact inputs; bump the version`,
     );
     assert.equal(
       comparison.status,
