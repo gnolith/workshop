@@ -24,7 +24,10 @@ assert.equal(
 assert.ok(
   readFileSync('CHANGELOG.md', 'utf8').includes(`## [${manifest.version}]`),
 );
-assertVersionIsUnambiguous(manifest);
+assertVersionIsUnambiguous(manifest, {
+  ref: `refs/tags/${tag}`,
+  requireHead: true,
+});
 const { provenance } = await loadAndVerifyArtifact();
 assert.equal(
   provenance.source.dirty,

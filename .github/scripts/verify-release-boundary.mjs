@@ -10,9 +10,13 @@ const ciWorkflow = await readFile(
   new URL('../workflows/ci.yml', import.meta.url),
   'utf8',
 );
+const releasePolicy = await readFile(
+  new URL('../release-policy.md', import.meta.url),
+  'utf8',
+);
 const workflowSha256 = createHash('sha256').update(workflow).digest('hex');
 const expectedWorkflowSha256 =
-  'f84774228e6b3c425cbea151873fe1567567e27137156a44db0ef80b6a2ef557';
+  '8d8e4dfcd45e85a4db7c5bcffdf692ba2275df609b7d48981c7e60cbac96175c';
 
 const build = job('build-and-verify', 'publish');
 const publish = job('publish', 'persist-provenance');
@@ -36,9 +40,9 @@ assert.equal(
   'only publish may use the npm environment',
 );
 assert.equal(
-  count(workflow, /secrets\.NPM_BOOTSTRAP_TOKEN/gu),
-  1,
-  'npm token must appear exactly once',
+  count(workflow, /NPM_BOOTSTRAP_TOKEN|NODE_AUTH_TOKEN|secrets\./gu),
+  0,
+  'release workflow must not reference npm credentials or GitHub secrets',
 );
 assert.equal(
   count(workflow, /npm publish/gu),
@@ -48,6 +52,11 @@ assert.equal(
 assert.match(
   ciWorkflow,
   /run: node \.github\/scripts\/test-release-boundary-runtime\.mjs/u,
+);
+assert.match(releasePolicy, /publishes only through npm trusted publishing/u);
+assert.match(
+  releasePolicy,
+  /no npm access token, bootstrap secret, or `NODE_AUTH_TOKEN`/u,
 );
 assert.equal(count(workflow, /assert\.deepEqual\(statement\.subject/gu), 2);
 assert.equal(
@@ -160,13 +169,11 @@ ordered(publish, [
   "await appendFile(process.env.GITHUB_OUTPUT, 'exists=true\\n', 'utf8');",
   '- name: Publish verified package',
   "if: steps.registry-state.outputs.exists == 'false'",
-  'NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}',
-  'PACKAGE_ARCHIVE: ${{ steps.release-boundary.outputs.archive }}',
-  'run: npm publish "$PACKAGE_ARCHIVE" --ignore-scripts --access public --provenance',
+  'run: npm publish "${{ steps.release-boundary.outputs.archive }}" --ignore-scripts --access public --provenance',
 ]);
 assert.doesNotMatch(
   publish,
-  /contents:|github\.token|GH_TOKEN|actions\/checkout@|npm ci|npm run|\.\/scripts\/|node_modules|\b(?:bash|sh|python|ruby|perl|pwsh|powershell)\b/u,
+  /contents:|github\.token|GH_TOKEN|secrets\.|NPM_BOOTSTRAP_TOKEN|NODE_AUTH_TOKEN|actions\/checkout@|npm ci|npm run|\.\/scripts\/|node_modules|\b(?:bash|sh|python|ruby|perl|pwsh|powershell)\b/u,
 );
 assert.equal(
   count(publish, /^\s+(?:- )?uses:/gmu),
@@ -185,7 +192,7 @@ assert.equal(
 );
 assert.match(
   publish,
-  /- name: Publish verified package\n        if: steps\.registry-state\.outputs\.exists == 'false'\n        env:\n          NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_BOOTSTRAP_TOKEN \}\}\n          PACKAGE_ARCHIVE: \$\{\{ steps\.release-boundary\.outputs\.archive \}\}\n        run: npm publish "\$PACKAGE_ARCHIVE" --ignore-scripts --access public --provenance\n?$/u,
+  /- name: Publish verified package\n        if: steps\.registry-state\.outputs\.exists == 'false'\n        run: npm publish "\$\{\{ steps\.release-boundary\.outputs\.archive \}\}" --ignore-scripts --access public --provenance\n?$/u,
 );
 
 ordered(evidence, [
