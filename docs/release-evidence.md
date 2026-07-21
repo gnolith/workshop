@@ -1,4 +1,4 @@
-# Workshop 0.2.0 release evidence
+# Workshop 0.2.1 release evidence
 
 ## Workshop package handoff ready
 
@@ -16,7 +16,7 @@ checkout and runs the same format command after `npm ci`.
 
 | Package-owned gate                           | Evidence                                                                    | Status           |
 | -------------------------------------------- | --------------------------------------------------------------------------- | ---------------- |
-| Format, lint, strict types, tests, coverage  | Complete local gate; 53 tests                                               | PASS             |
+| Format, lint, strict types, tests, coverage  | Complete local gate; 68 tests                                               | PASS             |
 | D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                | PASS             |
 | Embedded SQLite parity                       | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention     | PASS             |
 | SPARQL and Taproot adapter boundary          | Parser, dry-run, delegation, revision tests                                 | PASS             |

@@ -18,6 +18,79 @@ afterEach(async () => {
 });
 
 describe('resumable onboarding', () => {
+  it.each([
+    ['entity', 'markApplying'],
+    ['entity', 'beforeEffect'],
+    ['entity', 'afterEffect'],
+    ['entity', 'completeStep'],
+    ['memory', 'markApplying'],
+    ['memory', 'beforeEffect'],
+    ['memory', 'afterEffect'],
+    ['memory', 'completeStep'],
+    ['task', 'markApplying'],
+    ['task', 'beforeEffect'],
+    ['task', 'afterEffect'],
+    ['task', 'completeStep'],
+  ] as const)(
+    'safely reopens and retries a %s step interrupted at %s',
+    async (kind, boundary) => {
+      const harness = await createHarness();
+      const plan = harness.service().plan({
+        key: `fault-${kind}-${boundary}`,
+        topics: ['One'],
+        memories: [
+          {
+            slug: 'orientation',
+            input: { description: 'Orientation', content: 'Known evidence.' },
+          },
+        ],
+      });
+      const isCheckpointFault =
+        boundary === 'markApplying' || boundary === 'completeStep';
+      let inject = true;
+      const checkpointBoundary = isCheckpointFault ? boundary : 'markApplying';
+      const faultingStore = isCheckpointFault
+        ? checkpointFaultStore(
+            harness.store,
+            checkpointBoundary,
+            kind,
+            () => inject,
+            () => {
+              inject = false;
+            },
+          )
+        : harness.store;
+      if (!isCheckpointFault) {
+        harness.sideEffectFault = { kind, phase: boundary };
+      }
+
+      const first = harness.service(faultingStore).apply(plan, 'owner');
+      if (isCheckpointFault) {
+        await expect(first).rejects.toThrow(`interrupted at ${boundary}`);
+        harness.advance(10);
+      } else {
+        await expect(first).resolves.toMatchObject({
+          state: 'retryable',
+          retryable: true,
+        });
+      }
+
+      const completed = await harness.service().resume(plan.key, 'owner');
+      expect(completed).toMatchObject({
+        state: 'completed',
+        completedSteps: 3,
+        totalSteps: 3,
+      });
+      expect(harness.entityEffects).toHaveLength(1);
+      expect(harness.memoryEffects).toHaveLength(1);
+      expect(harness.taskEffects).toHaveLength(1);
+      expect(completed.steps.find((step) => step.kind === kind)?.attempts).toBe(
+        boundary === 'markApplying' ? 1 : 2,
+      );
+    },
+    15_000,
+  );
+
   it('replays an effect after interruption without duplicating it', async () => {
     const harness = await createHarness();
     let failCheckpoint = true;
@@ -129,13 +202,22 @@ describe('resumable onboarding', () => {
     expect(await service.get(plan.key)).toBeNull();
   });
 
-  it('does not allow a different principal to resume durable effects', async () => {
+  it('enforces the stored principal for resume, same-plan apply, and reapply', async () => {
     const harness = await createHarness();
     harness.failTaskOnce = true;
     const service = harness.service();
     const plan = service.plan({ key: 'principal-bound', topics: ['One'] });
     await service.apply(plan, 'owner');
     await expect(service.resume(plan.key, 'intruder')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    await expect(service.apply(plan, 'intruder')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    await expect(service.apply(plan, 'owner')).resolves.toMatchObject({
+      state: 'completed',
+    });
+    await expect(service.apply(plan, 'intruder')).rejects.toMatchObject({
       code: 'forbidden',
     });
   });
@@ -174,6 +256,12 @@ async function createHarness() {
     memoryEffects: [] as string[],
     taskEffects: [] as string[],
     failTaskOnce: false,
+    sideEffectFault: undefined as
+      | {
+          kind: 'entity' | 'memory' | 'task';
+          phase: 'beforeEffect' | 'afterEffect';
+        }
+      | undefined,
     now: () => new Date(tick),
     advance: (milliseconds: number) => {
       tick += milliseconds;
@@ -186,6 +274,7 @@ async function createHarness() {
         {
           async create(input) {
             const key = input.idempotencyKey ?? '';
+            maybeFailSideEffect(harness, 'task', 'beforeEffect');
             if (harness.failTaskOnce) {
               harness.failTaskOnce = false;
               throw new Error('temporary task failure');
@@ -206,11 +295,13 @@ async function createHarness() {
               updatedAt: new Date(tick).toISOString(),
             };
             taskByKey.set(key, value);
+            maybeFailSideEffect(harness, 'task', 'afterEffect');
             return value;
           },
         },
         {
           async putIdempotent(slug, input, context) {
+            maybeFailSideEffect(harness, 'memory', 'beforeEffect');
             const existing = memoryByKey.get(context.idempotencyKey);
             if (existing) return existing;
             harness.memoryEffects.push(context.idempotencyKey);
@@ -223,16 +314,19 @@ async function createHarness() {
               updatedAt: new Date(tick).toISOString(),
             };
             memoryByKey.set(context.idempotencyKey, value);
+            maybeFailSideEffect(harness, 'memory', 'afterEffect');
             return value;
           },
         },
         {
           async createItem(input, context) {
+            maybeFailSideEffect(harness, 'entity', 'beforeEffect');
             const existing = entityByKey.get(context.idempotencyKey);
             if (existing) return existing;
             harness.entityEffects.push(context.idempotencyKey);
             const value = { entityId: `Q${entityByKey.size + 1}`, input };
             entityByKey.set(context.idempotencyKey, value);
+            maybeFailSideEffect(harness, 'entity', 'afterEffect');
             return value;
           },
         },
@@ -247,6 +341,65 @@ async function createHarness() {
     },
   };
   return harness;
+}
+
+function maybeFailSideEffect(
+  harness: {
+    sideEffectFault:
+      | {
+          kind: 'entity' | 'memory' | 'task';
+          phase: 'beforeEffect' | 'afterEffect';
+        }
+      | undefined;
+  },
+  kind: 'entity' | 'memory' | 'task',
+  phase: 'beforeEffect' | 'afterEffect',
+): void {
+  if (
+    harness.sideEffectFault?.kind === kind &&
+    harness.sideEffectFault.phase === phase
+  ) {
+    harness.sideEffectFault = undefined;
+    throw new Error(`interrupted at ${phase}`);
+  }
+}
+
+function checkpointFaultStore(
+  store: OnboardingCheckpointStore,
+  boundary: 'markApplying' | 'completeStep',
+  kind: 'entity' | 'memory' | 'task',
+  shouldInject: () => boolean,
+  didInject: () => void,
+): OnboardingCheckpointStore {
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'markApplying' && boundary === 'markApplying') {
+        return async (
+          ...args: Parameters<OnboardingCheckpointStore['markApplying']>
+        ) => {
+          const stepKey = args[1];
+          if (shouldInject() && stepKey.includes(`:${kind}:`)) {
+            didInject();
+            throw new Error(`interrupted at ${boundary}`);
+          }
+          return target.markApplying(...args);
+        };
+      }
+      if (property === 'completeStep' && boundary === 'completeStep') {
+        return async (
+          ...args: Parameters<OnboardingCheckpointStore['completeStep']>
+        ) => {
+          const stepKey = args[1];
+          if (shouldInject() && stepKey.includes(`:${kind}:`)) {
+            didInject();
+            throw new Error(`interrupted at ${boundary}`);
+          }
+          return target.completeStep(...args);
+        };
+      }
+      return Reflect.get(target, property, receiver) as unknown;
+    },
+  });
 }
 
 async function executeSql(db: D1DatabaseLike, sql: string): Promise<void> {

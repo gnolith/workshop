@@ -20,6 +20,11 @@ const integer = (description: string) => ({
   minimum: 0,
   description,
 });
+const positiveInteger = (description: string) => ({
+  type: 'integer',
+  minimum: 1,
+  description,
+});
 const object = (description: string) => ({
   type: 'object',
   description,
@@ -131,7 +136,7 @@ const taskTools = [
     'task-write',
     {
       id: string('Task ID.'),
-      expectedRevision: integer('Exact current task revision.'),
+      expectedRevision: positiveInteger('Exact current task revision.'),
       expectedUpdatedAt: string('Exact current task updatedAt timestamp.'),
       ...taskInputProperties,
     },
@@ -144,7 +149,7 @@ const taskTools = [
     'task-write',
     {
       id: string('Task ID.'),
-      expectedRevision: integer('Exact current task revision.'),
+      expectedRevision: positiveInteger('Exact current task revision.'),
       expectedUpdatedAt: string('Exact current task updatedAt timestamp.'),
     },
     ['id'],
@@ -196,7 +201,9 @@ const memoryTools = [
       slug: string('Lowercase hyphenated slug.'),
       description: string('Purpose of this guidance.'),
       content: string('Reusable guidance.'),
-      expectedRevision: integer('Optional exact current memory revision.'),
+      expectedRevision: positiveInteger(
+        'Optional exact current memory revision.',
+      ),
       expectedUpdatedAt: string('Optional optimistic concurrency timestamp.'),
     },
     ['slug', 'description', 'content'],

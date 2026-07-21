@@ -79,7 +79,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { readAppliedMigrations } from '@gnolith/diamond';
 import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
-import { applyWorkshopMigrations, WORKSHOP_SCHEMA_VERSION } from '@gnolith/workshop/migrations';
+import { applyWorkshopMigrations, WORKSHOP_SCHEMA_VERSION, workshopMigrations } from '@gnolith/workshop/migrations';
 import { createWorkshopCore } from '@gnolith/workshop/core';
 import { HealthService, OnboardingService, SqlOnboardingCheckpointStore } from '@gnolith/workshop/server';
 
@@ -203,6 +203,37 @@ first = new NodeSqliteDatabase(path);
 core = createWorkshopCore({ persistence: first, ...options });
 assert.equal((await core.tasks.get(processTask.id)).claimed, true);
 await first.close();
+
+const legacyPath = join(${JSON.stringify(root)}, 'workshop-v1.sqlite');
+let legacy = new NodeSqliteDatabase(legacyPath);
+const legacyStatements = workshopMigrations[0].sql
+  .split(/;\\s*(?:\\r?\\n|$)/u)
+  .map((statement) => statement.trim())
+  .filter(Boolean)
+  .map((statement) => legacy.prepare(statement));
+await legacy.batch(legacyStatements);
+await legacy.batch([
+  legacy.prepare("INSERT INTO workshop_memories (slug, description, content, created_at, updated_at) VALUES ('legacy-memory', 'Legacy', 'Before migration', '2026-07-20 12:00:00', '2026-07-20 12:00:00')"),
+  legacy.prepare("INSERT INTO workshop_tasks (id, description, prompt, context_queries, memory_slugs, claimed, created_at, updated_at) VALUES ('legacy-update', 'Legacy update', 'Before migration', '[]', json_array('legacy-memory'), 0, '2026-07-20 12:00:00', '2026-07-20 12:00:00')"),
+  legacy.prepare("INSERT INTO workshop_tasks (id, description, prompt, context_queries, memory_slugs, claimed, created_at, updated_at) VALUES ('legacy-archive', 'Legacy archive', 'Before migration', '[]', '[]', 0, '2026-07-20 12:00:00', '2026-07-20 12:00:00')"),
+]);
+await applyWorkshopMigrations(legacy);
+const legacyRecords = await readAppliedMigrations(legacy, '@gnolith/workshop');
+assert.deepEqual(legacyRecords.map(({ adopted }) => adopted), [true, false, false]);
+const legacyCore = createWorkshopCore({ persistence: legacy, ...options });
+const legacyMemory = await legacyCore.memories.get('legacy-memory');
+assert.equal((await legacyCore.memories.upsert('legacy-memory', {
+  description: 'Legacy', content: 'Migrated', expectedUpdatedAt: legacyMemory.updatedAt,
+})).revision, 2);
+const legacyTask = await legacyCore.tasks.get('legacy-update');
+assert.equal((await legacyCore.tasks.update('legacy-update', {
+  expectedUpdatedAt: legacyTask.updatedAt, prompt: 'Migrated update',
+})).revision, 2);
+const legacyArchive = await legacyCore.tasks.get('legacy-archive');
+assert.equal((await legacyCore.tasks.archive('legacy-archive', {
+  expectedUpdatedAt: legacyArchive.updatedAt,
+})).archivedAt !== undefined, true);
+await legacy.close();
 console.log('Workshop packed-artifact node:sqlite reopen, migrations, revisions, onboarding, health, connection and process contention parity passed');
 `,
 );

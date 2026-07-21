@@ -1,7 +1,7 @@
 /** Runtime-neutral package identity. Runtime APIs use explicit subpaths. */
 export const workshopPackage = {
   name: '@gnolith/workshop',
-  version: '0.2.0',
+  version: '0.2.1',
   schemaVersion: 3,
 } as const;
 

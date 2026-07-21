@@ -62,23 +62,32 @@ CREATE INDEX workshop_memories_updated_idx
   {
     id: '0002_revisions',
     checksum:
-      'sha256:b0ab1dc997ed97235f14720bf5e8eb960814ffbf783717d827890ad80b9b7bab',
+      'sha256:298c155c7069bc2e02642db9c0193d29cc5a24eabe93f6595168575241cfa5f6',
     sql: `ALTER TABLE workshop_tasks
   ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
 
 ALTER TABLE workshop_memories
   ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
 
+-- Version-one rows used SQLite's CURRENT_TIMESTAMP representation while the
+-- public API returns ISO timestamps.  Persist the public representation before
+-- timestamp-based compare-and-swap is used against an adopted row.
+UPDATE workshop_tasks
+SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
+
+UPDATE workshop_memories
+SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
+
 UPDATE workshop_schema
 SET version = 2,
-    package_version = '0.2.0',
+    package_version = '0.2.1',
     updated_at = CURRENT_TIMESTAMP
 WHERE singleton = 1;`,
   },
   {
     id: '0003_resumable_onboarding',
     checksum:
-      'sha256:0395ecee808ff774c6e6d0e7cd3d62519ac524300a222c60daf5c54cd7ffad30',
+      'sha256:4f6ff933102eddecbac024d9e0728a60e488bdb2599df78a7fc39e92cfe9715b',
     sql: `CREATE TABLE workshop_onboarding_runs (
   key TEXT PRIMARY KEY,
   plan_json TEXT NOT NULL CHECK (json_valid(plan_json)),
@@ -122,7 +131,7 @@ CREATE INDEX workshop_onboarding_steps_state_idx
   ON workshop_onboarding_steps (run_key, state, ordinal);
 
 UPDATE workshop_schema
-SET version = 3, package_version = '0.2.0', updated_at = CURRENT_TIMESTAMP
+SET version = 3, package_version = '0.2.1', updated_at = CURRENT_TIMESTAMP
 WHERE singleton = 1;`,
   },
 ] as const;

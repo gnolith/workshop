@@ -10,6 +10,7 @@ import {
   type WorkshopMigrationLedgerApi,
   type WorkshopNamespacedMigration,
 } from '../src/migrations.js';
+import { createWorkshopCore } from '../src/server/context.js';
 import type { WorkshopPersistence } from '../src/server/database.js';
 
 describe('migration artifact integrity', () => {
@@ -69,6 +70,71 @@ describe('migration artifact integrity', () => {
     }
   });
 
+  it('makes freshly returned timestamp tokens usable for migrated rows', async () => {
+    const fixture = await database();
+    try {
+      await execute(fixture.db, workshopMigrations[0]!.sql);
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_tasks
+           (id, description, prompt, context_queries, memory_slugs, claimed, created_at, updated_at)
+           VALUES ('legacy-task', 'Legacy', 'Before', '[]', '[]', 0,
+                   '2026-07-20 12:00:00', '2026-07-20 12:00:00')`,
+        )
+        .run();
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_memories
+           (slug, description, content, created_at, updated_at)
+           VALUES ('legacy-memory', 'Legacy', 'Before',
+                   '2026-07-20 12:00:00', '2026-07-20 12:00:00')`,
+        )
+        .run();
+      await applyWorkshopMigrations(fixture.db, testLedger);
+      const core = createWorkshopCore({
+        persistence: fixture.db,
+        knowledge: {
+          async call() {
+            throw new Error('not used');
+          },
+          async health() {
+            return true;
+          },
+        },
+        executeSparql: async () => ({
+          type: 'boolean',
+          data: true,
+          truncated: false,
+        }),
+        clock: () => new Date('2026-07-20T12:00:01.000Z'),
+      });
+
+      const legacyMemory = await core.memories.get('legacy-memory');
+      expect(legacyMemory.updatedAt).toBe('2026-07-20T12:00:00.000Z');
+      await expect(
+        core.memories.upsert('legacy-memory', {
+          description: 'Legacy',
+          content: 'After',
+          expectedUpdatedAt: legacyMemory.updatedAt,
+        }),
+      ).resolves.toMatchObject({ content: 'After', revision: 2 });
+
+      const legacyTask = await core.tasks.get('legacy-task');
+      expect(legacyTask.updatedAt).toBe('2026-07-20T12:00:00.000Z');
+      const updated = await core.tasks.update('legacy-task', {
+        prompt: 'After',
+        expectedUpdatedAt: legacyTask.updatedAt,
+      });
+      await expect(
+        core.tasks.archive('legacy-task', {
+          expectedUpdatedAt: updated.updatedAt,
+        }),
+      ).resolves.toMatchObject({ archivedAt: '2026-07-20T12:00:01.000Z' });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('fails closed on recorded checksum drift', async () => {
     const fixture = await database();
     try {
@@ -104,9 +170,106 @@ describe('migration artifact integrity', () => {
         .run();
       await expect(
         applyWorkshopMigrations(fixture.db, testLedger),
-      ).rejects.toThrow('missing table workshop_tasks');
+      ).rejects.toThrow(
+        'table set is workshop_schema; expected workshop_memories, workshop_schema, workshop_tasks',
+      );
     } finally {
       await fixture.dispose();
+    }
+  });
+
+  it('refuses to adopt structurally drifted legacy columns and indexes', async () => {
+    const columnFixture = await database();
+    try {
+      await execute(columnFixture.db, workshopMigrations[0]!.sql);
+      await columnFixture.db
+        .prepare('ALTER TABLE workshop_memories ADD COLUMN unexpected TEXT')
+        .run();
+      await expect(
+        applyWorkshopMigrations(columnFixture.db, testLedger),
+      ).rejects.toThrow('workshop_memories columns do not match');
+    } finally {
+      await columnFixture.dispose();
+    }
+
+    const indexFixture = await database();
+    try {
+      await execute(indexFixture.db, workshopMigrations[0]!.sql);
+      await indexFixture.db
+        .prepare('DROP INDEX workshop_tasks_updated_idx')
+        .run();
+      await expect(
+        applyWorkshopMigrations(indexFixture.db, testLedger),
+      ).rejects.toThrow('index ownership or definitions do not match');
+    } finally {
+      await indexFixture.dispose();
+    }
+  });
+
+  it('refuses behavior-changing triggers and views with arbitrary names', async () => {
+    const triggerFixture = await database();
+    try {
+      await execute(triggerFixture.db, workshopMigrations[0]!.sql);
+      await triggerFixture.db
+        .prepare(
+          `CREATE TRIGGER mutate_task_behavior
+           AFTER UPDATE ON workshop_tasks
+           BEGIN
+             SELECT 1;
+           END`,
+        )
+        .run();
+      await expect(
+        applyWorkshopMigrations(triggerFixture.db, testLedger),
+      ).rejects.toThrow(
+        'unexpected schema object trigger mutate_task_behavior',
+      );
+    } finally {
+      await triggerFixture.dispose();
+    }
+
+    const hostTriggerFixture = await database();
+    try {
+      await execute(hostTriggerFixture.db, workshopMigrations[0]!.sql);
+      await hostTriggerFixture.db
+        .prepare(
+          `CREATE TABLE host_events (
+             task_id TEXT NOT NULL
+           )`,
+        )
+        .run();
+      await hostTriggerFixture.db
+        .prepare(
+          `CREATE TRIGGER propagate_host_event
+           AFTER INSERT ON host_events
+           BEGIN
+             DELETE FROM workshop_tasks WHERE id = NEW.task_id;
+           END`,
+        )
+        .run();
+      await expect(
+        applyWorkshopMigrations(hostTriggerFixture.db, testLedger),
+      ).rejects.toThrow(
+        'unexpected schema object trigger propagate_host_event',
+      );
+    } finally {
+      await hostTriggerFixture.dispose();
+    }
+
+    const viewFixture = await database();
+    try {
+      await execute(viewFixture.db, workshopMigrations[0]!.sql);
+      await viewFixture.db
+        .prepare(
+          `CREATE VIEW public_task_projection AS
+           SELECT id, updated_at FROM workshop_tasks`,
+        )
+        .run();
+      await expect(
+        applyWorkshopMigrations(viewFixture.db, testLedger),
+      ).rejects.toThrow('unexpected schema object view public_task_projection');
+    } finally {
+      await viewFixture.dispose();
     }
   });
 

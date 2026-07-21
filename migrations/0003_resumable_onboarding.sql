@@ -41,5 +41,5 @@ CREATE INDEX workshop_onboarding_steps_state_idx
   ON workshop_onboarding_steps (run_key, state, ordinal);
 
 UPDATE workshop_schema
-SET version = 3, package_version = '0.2.0', updated_at = CURRENT_TIMESTAMP
+SET version = 3, package_version = '0.2.1', updated_at = CURRENT_TIMESTAMP
 WHERE singleton = 1;
