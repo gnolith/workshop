@@ -1,12 +1,19 @@
 import { WorkshopError } from '../protocol/errors.js';
-import type { KnowledgeService } from '../protocol/knowledge.js';
 import type { Memory, UpsertMemoryInput } from '../protocol/memories.js';
 import type {
+  OnboardingFailure,
   OnboardingSeedInput,
   OnboardingSeedPlan,
   OnboardingSeedResult,
+  OnboardingStepKind,
 } from '../protocol/onboarding.js';
 import type { CreateTaskInput, Task } from '../protocol/tasks.js';
+import type {
+  NewOnboardingStep,
+  OnboardingCheckpointStore,
+  StoredOnboardingRun,
+  StoredOnboardingStep,
+} from './onboarding-store.js';
 import { requiredText } from './validation.js';
 
 export type {
@@ -14,37 +21,93 @@ export type {
   OnboardingSeedPlan,
   OnboardingSeedResult,
 } from '../protocol/onboarding.js';
+export {
+  SqlOnboardingCheckpointStore,
+  type OnboardingCheckpointStore,
+} from './onboarding-store.js';
 
+/** Task creation must honor CreateTaskInput.idempotencyKey. */
 export interface OnboardingTaskWriter {
   create(input: CreateTaskInput, principalId?: string): Promise<Task>;
 }
 
+/**
+ * A replay must return the original memory when the slug and content match and
+ * must conflict rather than overwrite when they do not.
+ */
 export interface OnboardingMemoryWriter {
-  upsert(
+  putIdempotent(
     slug: string,
     input: UpsertMemoryInput,
-    principalId?: string,
+    context: { principalId: string; idempotencyKey: string },
   ): Promise<Memory>;
 }
 
+/**
+ * The implementation must durably deduplicate by idempotencyKey. Replaying the
+ * same key and input returns the original receipt; reusing a key for different
+ * input must conflict. A request/audit identifier alone does not satisfy this
+ * contract.
+ */
+export interface OnboardingEntityWriter {
+  createItem(
+    input: Readonly<Record<string, unknown>>,
+    context: { principalId: string; idempotencyKey: string },
+  ): Promise<unknown>;
+}
+
 export interface OnboardingServiceOptions {
-  /** Host transaction boundary used when all configured writers can participate. */
-  transaction?: <T>(operation: () => Promise<T>) => Promise<T>;
+  store: OnboardingCheckpointStore;
   /** Optional Site-specific check supporting an expected-empty seed precondition. */
   isEmpty?: (key: string) => boolean | Promise<boolean>;
+  clock?: () => Date;
+  createLeaseToken?: () => string;
+  leaseDurationMs?: number;
+  classifyFailure?: (
+    error: unknown,
+    step: { key: string; kind: OnboardingStepKind },
+  ) => OnboardingFailure;
 }
 
 export interface ApplyOnboardingOptions {
   expectedEmpty?: boolean;
 }
 
+interface EntityStepInput {
+  labels: Record<string, { language: string; value: string }>;
+  descriptions: Record<string, { language: string; value: string }>;
+}
+
+interface MemoryStepInput {
+  slug: string;
+  input: UpsertMemoryInput;
+}
+
 export class OnboardingService {
+  readonly #clock: () => Date;
+  readonly #createLeaseToken: () => string;
+  readonly #leaseDurationMs: number;
+
   constructor(
     readonly tasks: OnboardingTaskWriter,
     readonly memories: OnboardingMemoryWriter,
-    readonly knowledge: KnowledgeService,
-    readonly options: OnboardingServiceOptions = {},
-  ) {}
+    readonly entities: OnboardingEntityWriter,
+    readonly options: OnboardingServiceOptions,
+  ) {
+    this.#clock = options.clock ?? (() => new Date());
+    this.#createLeaseToken =
+      options.createLeaseToken ?? (() => crypto.randomUUID());
+    this.#leaseDurationMs = options.leaseDurationMs ?? 5 * 60_000;
+    if (
+      !Number.isSafeInteger(this.#leaseDurationMs) ||
+      this.#leaseDurationMs < 1
+    ) {
+      throw new WorkshopError(
+        'validation_failed',
+        'leaseDurationMs must be a positive integer',
+      );
+    }
+  }
 
   plan(input: OnboardingSeedInput): OnboardingSeedPlan {
     const key = requiredText(input.key, 'key', 256);
@@ -76,8 +139,7 @@ export class OnboardingService {
         'Onboarding seed is limited to 50 reviewable entities',
       );
     }
-    const suppliedMemories = input.memories ?? [];
-    const memories = [...suppliedMemories];
+    const memories = [...(input.memories ?? [])];
     if (input.scopeBoundaries?.trim()) {
       memories.push({
         slug: `scope-${safeSlug(key)}`,
@@ -97,7 +159,15 @@ export class OnboardingService {
         },
       });
     }
-    const memorySlugs = memories.map((memory) => memory.slug);
+    const memorySlugs = memories.map((memory) =>
+      requiredText(memory.slug, 'memory slug', 256),
+    );
+    if (new Set(memorySlugs).size !== memorySlugs.length) {
+      throw new WorkshopError(
+        'validation_failed',
+        'Onboarding memory slugs must be unique',
+      );
+    }
     const tasks = entities
       .slice(0, 10)
       .map<CreateTaskInput>((entity, index) => ({
@@ -116,72 +186,293 @@ export class OnboardingService {
     return { key, defaultLanguage, entities, memories, tasks };
   }
 
+  async get(key: string): Promise<OnboardingSeedResult | null> {
+    const normalized = requiredText(key, 'key', 256);
+    const run = await this.options.store.get(normalized);
+    return run ? toResult(run) : null;
+  }
+
+  async resume(
+    key: string,
+    principalId: string,
+  ): Promise<OnboardingSeedResult> {
+    const normalized = requiredText(key, 'key', 256);
+    const run = await this.options.store.get(normalized);
+    if (!run) {
+      throw new WorkshopError(
+        'not_found',
+        `Onboarding seed ${normalized} was not found`,
+      );
+    }
+    return this.#run(run, requiredText(principalId, 'principalId', 256));
+  }
+
   async apply(
     plan: OnboardingSeedPlan,
     principalId: string,
     options: ApplyOnboardingOptions = {},
   ): Promise<OnboardingSeedResult> {
-    if (options.expectedEmpty) {
-      if (!this.options.isEmpty) {
-        throw new WorkshopError(
-          'validation_failed',
-          'The host must configure isEmpty before using expectedEmpty',
-        );
+    const principal = requiredText(principalId, 'principalId', 256);
+    const planJson = stableJson(plan);
+    let run = await this.options.store.get(plan.key);
+    if (!run) {
+      if (options.expectedEmpty) {
+        if (!this.options.isEmpty) {
+          throw new WorkshopError(
+            'validation_failed',
+            'The host must configure isEmpty before using expectedEmpty',
+          );
+        }
+        if (!(await this.options.isEmpty(plan.key))) {
+          throw new WorkshopError(
+            'conflict',
+            `Onboarding seed ${plan.key} requires an empty Site`,
+          );
+        }
       }
-      if (!(await this.options.isEmpty(plan.key))) {
-        throw new WorkshopError(
-          'conflict',
-          `Onboarding seed ${plan.key} requires an empty Site`,
-        );
-      }
+      run = await this.options.store.create(
+        plan.key,
+        planJson,
+        principal,
+        stepsFor(plan),
+        this.#clock().toISOString(),
+      );
     }
-    const operation = () => this.#apply(plan, principalId);
-    return this.options.transaction
-      ? this.options.transaction(operation)
-      : operation();
+    if (run.planJson !== planJson) {
+      throw new WorkshopError(
+        'conflict',
+        `Onboarding seed ${plan.key} already exists with a different plan`,
+        409,
+        { state: 'operator_action_required' },
+      );
+    }
+    return this.#run(run, principal);
   }
 
-  async #apply(
-    plan: OnboardingSeedPlan,
+  async #run(
+    initial: StoredOnboardingRun,
     principalId: string,
   ): Promise<OnboardingSeedResult> {
-    const entities: unknown[] = [];
-    for (const entity of plan.entities) {
-      entities.push(
-        await this.knowledge.call(
-          {
-            name: 'create_item',
-            input: {
-              labels: {
-                [plan.defaultLanguage]: {
-                  language: plan.defaultLanguage,
-                  value: entity.label,
-                },
-              },
-              descriptions: {
-                [plan.defaultLanguage]: {
-                  language: plan.defaultLanguage,
-                  value: `${entity.kind} seeded during research onboarding`,
-                },
-              },
-            },
-          },
-          { principalId, requestId: `onboarding:${plan.key}` },
-        ),
+    if (initial.principalId !== principalId) {
+      throw new WorkshopError(
+        'forbidden',
+        `Onboarding seed ${initial.key} belongs to a different principal`,
       );
     }
-    const memories: Memory[] = [];
-    for (const memory of plan.memories) {
-      memories.push(
-        await this.memories.upsert(memory.slug, memory.input, principalId),
+    if (
+      initial.state === 'completed' ||
+      initial.state === 'operator_action_required'
+    ) {
+      return toResult(initial);
+    }
+    const now = this.#clock();
+    const leaseToken = this.#createLeaseToken();
+    const claimed = await this.options.store.claim(
+      initial.key,
+      leaseToken,
+      now.toISOString(),
+      new Date(now.getTime() + this.#leaseDurationMs).toISOString(),
+    );
+    if (!claimed) {
+      const current = await this.#requireRun(initial.key);
+      if (current.state === 'completed') return toResult(current);
+      throw new WorkshopError(
+        'conflict',
+        `Onboarding seed ${initial.key} is already being applied`,
+        409,
+        { state: current.state },
       );
     }
-    const tasks: Task[] = [];
-    for (const task of plan.tasks) {
-      tasks.push(await this.tasks.create(task, principalId));
+
+    let run = await this.#requireRun(initial.key);
+    for (const step of run.steps) {
+      if (step.state === 'completed') continue;
+      const checkpointed = await this.options.store.markApplying(
+        run.key,
+        step.key,
+        leaseToken,
+        this.#clock().toISOString(),
+      );
+      if (!checkpointed) throw lostLease(run.key);
+      let receipt: unknown;
+      try {
+        receipt = await this.#execute(step, principalId);
+      } catch (error) {
+        const failure = this.#classify(error, step);
+        const state = failure.retryable
+          ? 'retryable'
+          : 'operator_action_required';
+        await this.options.store.failStep(
+          run.key,
+          step.key,
+          leaseToken,
+          state,
+          failure,
+          this.#clock().toISOString(),
+        );
+        return toResult(await this.#requireRun(run.key));
+      }
+      const completed = await this.options.store.completeStep(
+        run.key,
+        step.key,
+        leaseToken,
+        receipt,
+        this.#clock().toISOString(),
+      );
+      if (!completed) throw lostLease(run.key);
+      run = await this.#requireRun(run.key);
     }
-    return { key: plan.key, entities, memories, tasks };
+    const completed = await this.options.store.completeRun(
+      run.key,
+      leaseToken,
+      this.#clock().toISOString(),
+    );
+    if (!completed) throw lostLease(run.key);
+    return toResult(await this.#requireRun(run.key));
   }
+
+  #execute(step: StoredOnboardingStep, principalId: string): Promise<unknown> {
+    switch (step.kind) {
+      case 'entity':
+        return this.entities.createItem(
+          step.input as Readonly<Record<string, unknown>>,
+          { principalId, idempotencyKey: step.key },
+        );
+      case 'memory': {
+        const input = step.input as MemoryStepInput;
+        return this.memories.putIdempotent(input.slug, input.input, {
+          principalId,
+          idempotencyKey: step.key,
+        });
+      }
+      case 'task':
+        return this.tasks.create(step.input as CreateTaskInput, principalId);
+    }
+  }
+
+  #classify(error: unknown, step: StoredOnboardingStep): OnboardingFailure {
+    if (this.options.classifyFailure) {
+      return this.options.classifyFailure(error, {
+        key: step.key,
+        kind: step.kind,
+      });
+    }
+    if (error instanceof WorkshopError) {
+      const retryable = [
+        'dependency_unavailable',
+        'query_timeout',
+        'internal_error',
+      ].includes(error.code);
+      return { code: error.code, message: error.message, retryable };
+    }
+    return {
+      code: 'dependency_unavailable',
+      message:
+        error instanceof Error ? error.message : 'Onboarding step failed',
+      retryable: true,
+    };
+  }
+
+  async #requireRun(key: string): Promise<StoredOnboardingRun> {
+    const run = await this.options.store.get(key);
+    if (!run) {
+      throw new WorkshopError(
+        'internal_error',
+        `Onboarding seed ${key} disappeared`,
+      );
+    }
+    return run;
+  }
+}
+
+function stepsFor(plan: OnboardingSeedPlan): NewOnboardingStep[] {
+  let ordinal = 0;
+  return [
+    ...plan.entities.map<NewOnboardingStep>((entity, index) => ({
+      key: `onboarding:${plan.key}:entity:${index}`,
+      ordinal: ordinal++,
+      kind: 'entity',
+      input: {
+        labels: {
+          [plan.defaultLanguage]: {
+            language: plan.defaultLanguage,
+            value: entity.label,
+          },
+        },
+        descriptions: {
+          [plan.defaultLanguage]: {
+            language: plan.defaultLanguage,
+            value: `${entity.kind} seeded during research onboarding`,
+          },
+        },
+      } satisfies EntityStepInput,
+    })),
+    ...plan.memories.map<NewOnboardingStep>((memory, index) => ({
+      key: `onboarding:${plan.key}:memory:${index}`,
+      ordinal: ordinal++,
+      kind: 'memory',
+      input: memory satisfies MemoryStepInput,
+    })),
+    ...plan.tasks.map<NewOnboardingStep>((task, index) => ({
+      key: `onboarding:${plan.key}:task:${index}`,
+      ordinal: ordinal++,
+      kind: 'task',
+      input: {
+        ...task,
+        idempotencyKey: `onboarding:${plan.key}:task:${index}`,
+      },
+    })),
+  ];
+}
+
+function toResult(run: StoredOnboardingRun): OnboardingSeedResult {
+  const completed = run.steps.filter((step) => step.state === 'completed');
+  return {
+    key: run.key,
+    state: run.state,
+    retryable: run.state === 'retryable',
+    completedSteps: completed.length,
+    totalSteps: run.steps.length,
+    steps: run.steps.map((step) => ({
+      key: step.key,
+      ordinal: step.ordinal,
+      kind: step.kind,
+      state: step.state,
+      attempts: step.attempts,
+      ...(step.failure ? { failure: step.failure } : {}),
+    })),
+    ...(run.failure ? { failure: run.failure } : {}),
+    entities: completed
+      .filter((step) => step.kind === 'entity')
+      .map((step) => step.receipt),
+    memories: completed
+      .filter((step) => step.kind === 'memory')
+      .map((step) => step.receipt as Memory),
+    tasks: completed
+      .filter((step) => step.kind === 'task')
+      .map((step) => step.receipt as Task),
+  };
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortJson(item)]),
+  );
+}
+
+function lostLease(key: string): WorkshopError {
+  return new WorkshopError(
+    'conflict',
+    `Onboarding seed ${key} lost its workflow lease`,
+  );
 }
 
 function safeSlug(value: string): string {

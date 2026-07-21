@@ -23,6 +23,7 @@ export interface Task {
   result?: string;
   createdAt: string;
   updatedAt: string;
+  revision: number;
 }
 
 export interface CreateTaskInput {
@@ -34,14 +35,19 @@ export interface CreateTaskInput {
   memorySlugs?: string[];
 }
 
-export interface UpdateTaskInput {
-  expectedUpdatedAt: string;
+export interface UpdateTaskPatch {
   description?: string;
   role?: string | null;
   prompt?: string;
   contextQueries?: ContextQuery[];
   memorySlugs?: string[];
 }
+
+export type TaskRevisionPrecondition =
+  | { expectedRevision: number; expectedUpdatedAt?: string }
+  | { expectedRevision?: undefined; expectedUpdatedAt: string };
+
+export type UpdateTaskInput = UpdateTaskPatch & TaskRevisionPrecondition;
 
 export interface TaskFilters {
   role?: string;

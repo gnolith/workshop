@@ -39,6 +39,18 @@ existing research, scope boundaries, and reusable guidance. `plan` returns the
 small proposed seed; only an explicit `apply` writes ordinary Taproot Items,
 memories, and tasks. It creates no project, ontology explosion, or agents.
 `apply` accepts an explicit `expectedEmpty` precondition through the host's
-`isEmpty` adapter. When all writers can participate in a shared transaction,
-the host supplies `OnboardingServiceOptions.transaction`; Workshop runs the
-entire apply operation inside it and propagates rollback failures.
+`isEmpty` adapter. Applying is a durable, resumable workflow, not a
+cross-service transaction. Workshop records an immutable plan and a checkpoint
+for each entity, memory, and task. Every writer must honor the supplied
+idempotency key, so a retry after an interruption replays the uncertain step
+without duplicating it. The public result reports completed steps and whether a
+failure is retryable or needs operator action. A fresh lease serializes active
+attempts; an expired lease may be resumed by another process.
+
+The Site host must inject a replay-safe entity writer. A request or audit ID is
+not enough: the writer must return the original entity for the same key and
+input, and conflict if a key is reused with different content. Workshop uses
+the strongest atomic boundary offered by its checkpoint store for each local
+transition, but it never describes Taproot, memory, and task effects as one
+atomic commit. CLI, Docker, stdio transport, and complete-Site orchestration
+remain responsibilities of the external process package.

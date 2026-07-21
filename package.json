@@ -1,6 +1,6 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Hosted agent tasks, memories, coordination, and tooling.",
   "type": "module",
   "private": false,
@@ -29,6 +29,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
     },
     "./protocol": {
       "types": "./dist/protocol.d.ts",
@@ -80,6 +84,7 @@
     "lint": "eslint src test scripts",
     "pack:check": "npm run artifact:prepare",
     "performance:check": "node scripts/performance-check.mjs",
+    "parity:node-sqlite": "node scripts/node-sqlite-parity.mjs",
     "prepack": "npm run build",
     "readiness:check": "node scripts/readiness-check.mjs",
     "release:check": "node scripts/release-check.mjs",
@@ -98,8 +103,8 @@
     "swr": "^2.4.2"
   },
   "peerDependencies": {
-    "@gnolith/diamond": ">=0.3.2 <0.4.0",
-    "@gnolith/taproot": ">=0.1.0 <0.2.0",
+    "@gnolith/diamond": ">=0.4.0 <0.5.0",
+    "@gnolith/taproot": ">=0.1.0 <0.3.0",
     "@gnolith/waystone": ">=0.1.0 <0.2.0",
     "react": ">=19 <20"
   },

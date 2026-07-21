@@ -33,7 +33,8 @@ describe('Streamable HTTP MCP', () => {
     const packet = server.tools.find((tool) => tool.name === 'get_task_packet');
     expect(packet?.inputSchema.required).toEqual(['id']);
     const archive = server.tools.find((tool) => tool.name === 'archive_task');
-    expect(archive?.inputSchema.required).toEqual(['id', 'expectedUpdatedAt']);
+    expect(archive?.inputSchema.required).toEqual(['id']);
+    expect(archive?.inputSchema.properties).toHaveProperty('expectedRevision');
   });
 
   it('interoperates with the official MCP TypeScript client', async () => {

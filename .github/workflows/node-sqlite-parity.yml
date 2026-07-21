@@ -1,0 +1,34 @@
+name: Node SQLite parity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  node-sqlite-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Pack the pinned Diamond source
+        env:
+          DIAMOND_COMMIT: 326da7e48d77cddc5a58e21cf65d872ecb9b3b74
+        run: |
+          git clone --filter=blob:none https://github.com/gnolith/diamond.git "$RUNNER_TEMP/diamond"
+          git -C "$RUNNER_TEMP/diamond" checkout --detach "$DIAMOND_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/diamond" rev-parse HEAD)" = "$DIAMOND_COMMIT"
+          npm ci --prefix "$RUNNER_TEMP/diamond"
+          npm pack "$RUNNER_TEMP/diamond" --pack-destination "$RUNNER_TEMP"
+      - name: Verify packed-artifact node:sqlite parity
+        env:
+          DIAMOND_TARBALL: ${{ runner.temp }}/gnolith-diamond-0.4.0.tgz
+          DIAMOND_TARBALL_SHA256: ac8e34810a8504bd891b36a199973f2d65ef652555644813c7a36f1c7016c9d2
+        run: node scripts/node-sqlite-parity.mjs

@@ -6,12 +6,14 @@ export interface Memory {
   content: string;
   createdAt: string;
   updatedAt: string;
+  revision: number;
 }
 
 export interface UpsertMemoryInput {
   description: string;
   content: string;
   expectedUpdatedAt?: string;
+  expectedRevision?: number;
 }
 
 export interface MemoryFilters {

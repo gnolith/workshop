@@ -26,8 +26,45 @@ export interface OnboardingSeedPlan {
   tasks: CreateTaskInput[];
 }
 
+export type OnboardingRunState =
+  | 'pending'
+  | 'running'
+  | 'retryable'
+  | 'operator_action_required'
+  | 'completed';
+
+export type OnboardingStepState =
+  | 'pending'
+  | 'applying'
+  | 'completed'
+  | 'retryable'
+  | 'operator_action_required';
+
+export type OnboardingStepKind = 'entity' | 'memory' | 'task';
+
+export interface OnboardingFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface OnboardingStepProgress {
+  key: string;
+  ordinal: number;
+  kind: OnboardingStepKind;
+  state: OnboardingStepState;
+  attempts: number;
+  failure?: OnboardingFailure;
+}
+
 export interface OnboardingSeedResult {
   key: string;
+  state: OnboardingRunState;
+  retryable: boolean;
+  completedSteps: number;
+  totalSteps: number;
+  steps: OnboardingStepProgress[];
+  failure?: OnboardingFailure;
   entities: unknown[];
   memories: Memory[];
   tasks: Task[];

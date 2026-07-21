@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { WORKSHOP_SCHEMA_VERSION } from '../src/migrations.js';
 import { HealthService } from '../src/server/health.js';
 import { createTestContext } from './helpers.js';
 
@@ -24,7 +25,8 @@ describe('D1 integration and concurrency', () => {
     }).inspect();
     expect(health).toMatchObject({
       status: 'ok',
-      schemaVersion: 1,
+      schemaVersion: WORKSHOP_SCHEMA_VERSION,
+      checks: { persistence: true, d1: true },
       missingTables: [],
       missingIndexes: [],
     });

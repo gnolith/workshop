@@ -1,9 +1,13 @@
 import { WorkshopError, normalizeWorkshopError } from '../protocol/errors.js';
 import type { WorkshopPrincipal } from '../protocol.js';
-import { authorize } from '../server/authorization.js';
 import type { WorkshopRuntime } from '../server/context.js';
 import { resolveLimits } from '../server/limits.js';
-import { observed, observeSafely } from '../server/observability.js';
+import { observeSafely } from '../server/observability.js';
+import {
+  createWorkshopToolDispatcher,
+  type WorkshopDispatchFailure,
+  type WorkshopToolDispatcher,
+} from './dispatcher.js';
 import { workshopTools, type WorkshopToolDefinition } from './tools.js';
 
 export const WORKSHOP_MCP_PROTOCOL_VERSION = '2025-11-25';
@@ -33,6 +37,7 @@ export function createWorkshopMcpServer(
   runtime: WorkshopRuntime,
 ): WorkshopMcpServer {
   const limits = resolveLimits(runtime.limits);
+  const dispatcher = createWorkshopToolDispatcher(runtime);
   return {
     tools: workshopTools,
     async handle(request) {
@@ -133,7 +138,13 @@ export function createWorkshopMcpServer(
         });
       }
       try {
-        const result = await dispatch(runtime, principal, message, request);
+        const result = await dispatch(
+          runtime,
+          dispatcher,
+          principal,
+          message,
+          request,
+        );
         return rpcResponse(
           { jsonrpc: '2.0', id: message.id, result },
           200,
@@ -163,6 +174,7 @@ export function createWorkshopMcpServer(
 
 async function dispatch(
   runtime: WorkshopRuntime,
+  dispatcher: WorkshopToolDispatcher,
   principal: WorkshopPrincipal,
   message: JsonRpcMessage,
   request: Request,
@@ -179,68 +191,57 @@ async function dispatch(
           ? requested
           : WORKSHOP_MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: '@gnolith/workshop', version: '0.1.1' },
+        serverInfo: { name: '@gnolith/workshop', version: '0.2.0' },
         instructions:
           'Search existing tasks before creating overlapping work. Reading a task packet never claims it. All knowledge writes require the latest Taproot revision.',
       };
     }
     case 'ping':
       return {};
-    case 'tools/list':
-      authorize(principal, 'read');
+    case 'tools/list': {
+      const listed = dispatcher.listTools(principal);
+      if (!listed.ok) throw dispatchFailure(listed.failure);
       return {
-        tools: workshopTools
-          .filter((tool) => hasCapability(principal, tool.capability))
-          .map((tool) => ({
-            name: tool.name,
-            title: tool.title,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-          })),
+        tools: listed.value.map((tool) => ({
+          name: tool.name,
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
       };
+    }
     case 'tools/call': {
       const params = asObject(message.params);
       const name = typeof params.name === 'string' ? params.name : '';
-      const definition = workshopTools.find((tool) => tool.name === name);
-      if (!definition) throw new ProtocolError(-32602, `Unknown tool ${name}`);
-      authorize(principal, definition.capability);
       const input =
         params.arguments === undefined ? {} : asObject(params.arguments);
       const requestId =
         request.headers.get('x-request-id') ?? crypto.randomUUID();
-      const limits = resolveLimits(runtime.limits);
-      return observed(
-        runtime.observe,
-        { operation: 'mcp.call', principalId: principal.id, requestId },
-        async () => {
-          try {
-            const value = await withTimeout(
-              callTool(
-                runtime,
-                principal,
-                name,
-                input,
-                requestId,
-                request.signal,
-              ),
-              limits.toolTimeoutMs,
-            );
-            const structuredContent = toStructured(value);
-            return {
-              content: [{ type: 'text', text: JSON.stringify(value) }],
-              structuredContent,
-              isError: false,
-            };
-          } catch (error) {
-            const normalized = normalizeWorkshopError(error);
-            return {
-              content: [{ type: 'text', text: normalized.message }],
-              structuredContent: { error: normalized.toJSON() },
-              isError: true,
-            };
-          }
-        },
+      const called = await dispatcher.callTool(
+        { name, arguments: input },
+        { principal, requestId, signal: request.signal },
       );
+      if (!called.ok) {
+        if (called.failure.kind === 'unknown_tool') {
+          throw new ProtocolError(-32602, called.failure.error.message);
+        }
+        if (
+          called.failure.kind === 'unauthenticated' ||
+          called.failure.kind === 'forbidden'
+        ) {
+          throw dispatchFailure(called.failure);
+        }
+        return {
+          content: [{ type: 'text', text: called.failure.error.message }],
+          structuredContent: { error: called.failure.error },
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text', text: JSON.stringify(called.value) }],
+        structuredContent: toStructured(called.value),
+        isError: false,
+      };
     }
     default:
       throw new ProtocolError(
@@ -248,79 +249,6 @@ async function dispatch(
         `Method ${message.method} is not supported`,
       );
   }
-}
-
-async function callTool(
-  runtime: WorkshopRuntime,
-  principal: WorkshopPrincipal,
-  name: string,
-  input: Record<string, unknown>,
-  requestId: string,
-  signal: AbortSignal,
-): Promise<unknown> {
-  switch (name) {
-    case 'list_tasks':
-    case 'search_tasks':
-      return runtime.tasks.list(input);
-    case 'get_task_packet':
-      return runtime.packets.get(text(input.id, 'id'), signal);
-    case 'create_task':
-      return runtime.tasks.create(input as never, principal.id);
-    case 'update_task': {
-      const { id, ...update } = input;
-      return runtime.tasks.update(
-        text(id, 'id'),
-        update as never,
-        principal.id,
-      );
-    }
-    case 'archive_task':
-      return runtime.tasks.archive(text(input.id, 'id'), {
-        expectedUpdatedAt: text(input.expectedUpdatedAt, 'expectedUpdatedAt'),
-        principalId: principal.id,
-      });
-    case 'claim_task':
-      return runtime.tasks.claim(text(input.id, 'id'), principal.id);
-    case 'complete_task':
-      return runtime.tasks.complete(
-        text(input.id, 'id'),
-        input.result,
-        principal.id,
-      );
-    case 'list_memories':
-      return runtime.memories.list(input);
-    case 'get_memory':
-      return runtime.memories.get(text(input.slug, 'slug'));
-    case 'upsert_memory': {
-      const { slug, ...memory } = input;
-      return runtime.memories.upsert(
-        text(slug, 'slug'),
-        memory as never,
-        principal.id,
-      );
-    }
-    case 'validate_sparql':
-      return runtime.sparql.validate(input.sparql);
-    case 'dry_run_sparql':
-      return runtime.sparql.dryRun(text(input.sparql, 'sparql'), { signal });
-    case 'query_sparql':
-      return runtime.sparql.query(text(input.sparql, 'sparql'), { signal });
-    default:
-      return runtime.knowledge.call(
-        { name, input },
-        { principalId: principal.id, requestId },
-      );
-  }
-}
-
-function hasCapability(
-  principal: WorkshopPrincipal,
-  capability: WorkshopToolDefinition['capability'],
-): boolean {
-  return (
-    principal.capabilities.includes(capability) ||
-    principal.capabilities.includes('admin')
-  );
 }
 
 async function readMessage(
@@ -445,40 +373,19 @@ function asObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function text(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new WorkshopError('validation_failed', `${field} is required`, 400, {
-      field,
-    });
-  }
-  return value.trim();
-}
-
 function toStructured(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : { value };
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  milliseconds: number,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(new WorkshopError('query_timeout', 'Tool call timed out')),
-          milliseconds,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+function dispatchFailure(failure: WorkshopDispatchFailure): WorkshopError {
+  return new WorkshopError(
+    failure.error.code,
+    failure.error.message,
+    undefined,
+    failure.error.details,
+  );
 }
 
 class ProtocolError extends Error {

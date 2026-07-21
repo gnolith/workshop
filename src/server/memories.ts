@@ -11,7 +11,13 @@ import type { WorkshopLimits } from './limits.js';
 import { resolveLimits } from './limits.js';
 import type { ObserveWorkshop } from './observability.js';
 import { observed } from './observability.js';
-import { memorySlug, pageLimit, requiredText } from './validation.js';
+import {
+  isoDate,
+  memorySlug,
+  pageLimit,
+  requiredText,
+  validation,
+} from './validation.js';
 
 interface MemoryRow {
   slug: string;
@@ -19,7 +25,11 @@ interface MemoryRow {
   content: string;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
+
+const NEXT_UPDATED_AT =
+  "CASE WHEN ? > updated_at THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END";
 
 export interface MemoryServiceOptions {
   limits?: Partial<WorkshopLimits>;
@@ -122,18 +132,21 @@ export class MemoryService {
       'content',
       this.#limits.maxMemoryBytes,
     );
+    const expected = revisionPrecondition(input);
     const now = this.#clock().toISOString();
     return observed(
       this.options.observe,
       { operation: 'memory.upsert', ...(principalId ? { principalId } : {}) },
       async () => {
         let row: MemoryRow | null;
-        if (input.expectedUpdatedAt) {
+        if (expected) {
           row = await this.db
             .prepare(
-              'UPDATE workshop_memories SET description = ?, content = ?, updated_at = ? WHERE slug = ? AND updated_at = ? RETURNING *',
+              `UPDATE workshop_memories SET description = ?, content = ?,
+                 revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
+               WHERE slug = ? AND ${expected.column} = ? RETURNING *`,
             )
-            .bind(description, content, now, slug, input.expectedUpdatedAt)
+            .bind(description, content, now, now, slug, expected.value)
             .first<MemoryRow>();
           if (!row) {
             throw new WorkshopError(
@@ -146,7 +159,14 @@ export class MemoryService {
             .prepare(
               `INSERT INTO workshop_memories (slug, description, content, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET description = excluded.description, content = excluded.content, updated_at = excluded.updated_at
+               ON CONFLICT(slug) DO UPDATE SET
+                 description = excluded.description,
+                 content = excluded.content,
+                 revision = workshop_memories.revision + 1,
+                 updated_at = CASE
+                   WHEN excluded.updated_at > workshop_memories.updated_at THEN excluded.updated_at
+                   ELSE strftime('%Y-%m-%dT%H:%M:%fZ', workshop_memories.updated_at, '+0.001 seconds')
+                 END
                RETURNING *`,
             )
             .bind(slug, description, content, now, now)
@@ -155,6 +175,64 @@ export class MemoryService {
         if (!row)
           throw new WorkshopError('internal_error', 'Memory write failed');
         return toMemory(row);
+      },
+    );
+  }
+
+  /**
+   * Create onboarding memory exactly once. Replays return the existing value
+   * only when its durable content is identical; later human edits are never
+   * overwritten by a resumed onboarding run.
+   */
+  async putIdempotent(
+    slugValue: string,
+    input: UpsertMemoryInput,
+    context: { principalId: string; idempotencyKey: string },
+  ): Promise<Memory> {
+    const slug = memorySlug(slugValue);
+    const description = requiredText(
+      input.description,
+      'description',
+      this.#limits.maxDescriptionBytes,
+    );
+    const content = requiredText(
+      input.content,
+      'content',
+      this.#limits.maxMemoryBytes,
+    );
+    const now = this.#clock().toISOString();
+    return observed(
+      this.options.observe,
+      {
+        operation: 'memory.upsert',
+        principalId: context.principalId,
+      },
+      async () => {
+        const inserted = await this.db
+          .prepare(
+            `INSERT INTO workshop_memories
+             (slug, description, content, created_at, updated_at, revision)
+             VALUES (?, ?, ?, ?, ?, 1)
+             ON CONFLICT(slug) DO NOTHING
+             RETURNING *`,
+          )
+          .bind(slug, description, content, now, now)
+          .first<MemoryRow>();
+        if (inserted) return toMemory(inserted);
+        const existing = await this.db
+          .prepare('SELECT * FROM workshop_memories WHERE slug = ?')
+          .bind(slug)
+          .first<MemoryRow>();
+        if (
+          existing?.description === description &&
+          existing.content === content
+        ) {
+          return toMemory(existing);
+        }
+        throw new WorkshopError(
+          'conflict',
+          `Memory ${slug} already exists with different content for idempotency key ${context.idempotencyKey}`,
+        );
       },
     );
   }
@@ -167,7 +245,34 @@ function toMemory(row: MemoryRow): Memory {
     content: row.content,
     createdAt: normalizeSqlDate(row.created_at),
     updatedAt: normalizeSqlDate(row.updated_at),
+    revision: row.revision,
   };
+}
+
+interface ResolvedRevisionPrecondition {
+  column: 'revision' | 'updated_at';
+  value: number | string;
+}
+
+function revisionPrecondition(
+  input: UpsertMemoryInput,
+): ResolvedRevisionPrecondition | undefined {
+  const expectedUpdatedAt =
+    input.expectedUpdatedAt === undefined
+      ? undefined
+      : isoDate(input.expectedUpdatedAt, 'expectedUpdatedAt');
+  if (input.expectedRevision !== undefined) {
+    if (
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 1
+    ) {
+      throw validation('expectedRevision must be a positive safe integer');
+    }
+    return { column: 'revision', value: input.expectedRevision };
+  }
+  return expectedUpdatedAt === undefined
+    ? undefined
+    : { column: 'updated_at', value: expectedUpdatedAt };
 }
 
 function normalizeSqlDate(value: string): string {

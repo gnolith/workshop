@@ -1,9 +1,9 @@
-# Workshop 0.1.1 release evidence
+# Workshop 0.2.0 release evidence
 
 ## Workshop package handoff ready
 
 Current local package decision: **READY FOR REVIEW**. `npm run check` and
-`npm run artifact:verify` passed in this working tree on 2026-07-20. The stricter
+`npm run artifact:verify` passed in this working tree on 2026-07-21. The stricter
 release check correctly rejects this uncommitted, untagged tree. This is not
 authorization to commit, tag, push, or publish.
 
@@ -16,8 +16,9 @@ checkout and runs the same format command after `npm ci`.
 
 | Package-owned gate                           | Evidence                                                                    | Status           |
 | -------------------------------------------- | --------------------------------------------------------------------------- | ---------------- |
-| Format, lint, strict types, tests, coverage  | Complete local gate; 36 tests                                               | PASS             |
+| Format, lint, strict types, tests, coverage  | Complete local gate; 53 tests                                               | PASS             |
 | D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                | PASS             |
+| Embedded SQLite parity                       | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention     | PASS             |
 | SPARQL and Taproot adapter boundary          | Parser, dry-run, delegation, revision tests                                 | PASS             |
 | MCP schemas and official client              | Tool inventory plus SDK 1.29 initialize/list/call                           | PASS             |
 | Route factories, auth, health, observability | Unit and isolated package-runtime lifecycle tests                           | PASS             |
@@ -49,6 +50,6 @@ and React DOM. That counterevidence remains a full-Site compatibility item; the
 isolated package check is not evidence that a deployed Site needs no additional
 runtime configuration.
 
-The Codex agent creating a Site owns four-package assembly, managed bindings and
+The Codex agent creating a Site owns complete package assembly, managed bindings and
 migrations, host identity and secrets, deployment configuration, real graph
 projection, live Waystone/browser/MCP/Codex probes, and final acceptance.

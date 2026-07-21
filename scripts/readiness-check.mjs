@@ -8,6 +8,7 @@ assert.notEqual(manifest.version, '0.0.0');
 
 const expectedExports = [
   '.',
+  './core',
   './mcp',
   './migrations',
   './package.json',
