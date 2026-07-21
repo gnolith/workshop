@@ -37,3 +37,14 @@ from Taproot and include entity/revision metadata. `tools/list` is deterministic
 and capability-filtered. Domain failures are `isError` tool results so agents
 can correct inputs. Unknown tools remain JSON-RPC errors. Administrative claim
 reset is intentionally absent.
+
+Every operation that creates a statement revision requires explicit authored
+natural-language text. `add_statement` and `replace_statement` carry it as
+`statement.text`; `set_statement_rank`, qualifier mutations, and reference
+mutations carry it as top-level `text`. Initial `create_item.claims` statements
+also require `text`. Missing, empty, Unicode-whitespace-only, and format-only
+values are rejected before Taproot is called. Workshop forwards accepted text
+byte-for-byte, so reusing unchanged text is allowed only when the caller
+resupplies it explicitly. `remove_statement` is the sole text-exempt statement
+operation because it creates no surviving statement revision. Entity JSON
+exports retain canonical statement text.

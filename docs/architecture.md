@@ -6,6 +6,14 @@ agent-facing tasks, memories, policy adapters, HTTP/MCP, and UI. Knowledge write
 flow only through the injected `KnowledgeService`, normally created with
 `createTaprootKnowledgeService`. No Workshop path writes RDF directly.
 
+The adapter accepts the exported, function-property-based
+`TaprootRepositoryLike` contract rather than an untyped method bag. A CI lane
+builds and packs the pinned Taproot statement-text source, packs Workshop, and
+compiles the real Taproot repository against that public contract. This is a
+package-runtime compatibility check, not complete-Site assembly or acceptance.
+At the MCP boundary, Workshop validates authored statement text before
+delegation and preserves the exact supplied value.
+
 ## Tasks
 
 Tasks persist description, advisory role, prompt, context queries, memory slugs,
