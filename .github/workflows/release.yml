@@ -37,4 +37,15 @@ jobs:
           schema=".release/gnolith-workshop-${RELEASE_TAG#v}.provenance.schema.json"
           cp docs/release-provenance.schema.json "$schema"
           gh release upload "$RELEASE_TAG" "$provenance" "$schema"
-      - run: npm publish "$(npm run --silent artifact:path)" --access public --provenance
+      - name: Resolve verified package artifact
+        id: package-artifact
+        run: |
+          npm run artifact:verify
+          archive="$(npm run --silent artifact:path)"
+          test -f "$archive"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+          PACKAGE_ARCHIVE: ${{ steps.package-artifact.outputs.archive }}
+        run: npm publish "$PACKAGE_ARCHIVE" --access public --provenance --ignore-scripts
