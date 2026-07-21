@@ -3,5 +3,3 @@ dist/
 coverage/
 .wrangler/
 *.tgz
-.env
-.env.*

@@ -45,4 +45,3 @@ CREATE INDEX workshop_tasks_updated_idx
   ON workshop_tasks (updated_at DESC, id);
 CREATE INDEX workshop_memories_updated_idx
   ON workshop_memories (updated_at DESC, slug);
-
