@@ -1,47 +1,142 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Hosted agent tasks, memories, coordination, and tooling.",
   "type": "module",
-  "private": true,
+  "private": false,
   "sideEffects": false,
   "repository": {
     "type": "git",
     "url": "https://github.com/gnolith/workshop.git"
   },
+  "homepage": "https://github.com/gnolith/workshop#readme",
+  "bugs": {
+    "url": "https://github.com/gnolith/workshop/issues"
+  },
+  "author": "Gnolith contributors",
+  "keywords": [
+    "agents",
+    "cloudflare-d1",
+    "mcp",
+    "research",
+    "sparql"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "import": "./dist/protocol.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./site": {
+      "types": "./dist/site.d.ts",
+      "import": "./dist/site.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "import": "./dist/ui.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "import": "./dist/migrations.js"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "docs",
+    "examples/codex-site-canary/worker.ts",
+    "examples/codex-site-canary/wrangler.jsonc",
+    "migrations",
+    "CHANGELOG.md",
+    "COMPATIBILITY.md",
     "README.md",
     "LICENSE",
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run performance:check && npm run worker:check && npm run worker:test && npm run pack:check && npm run consumer:check && npm run audit:check && npm run readiness:check",
+    "audit:check": "npm audit --omit=dev --audit-level=high",
+    "consumer:check": "node scripts/consumer-smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint src test",
+    "lint": "eslint src test scripts",
+    "pack:check": "npm pack --dry-run",
+    "performance:check": "node scripts/performance-check.mjs",
+    "prepack": "npm run build",
+    "readiness:check": "node scripts/readiness-check.mjs",
+    "release:check": "node scripts/release-check.mjs",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "worker:check": "wrangler deploy --dry-run --config examples/codex-site-canary/wrangler.jsonc --outdir .wrangler/canary",
+    "worker:test": "node scripts/worker-e2e.mjs"
   },
   "engines": {
     "node": ">=22"
   },
   "packageManager": "npm@11.9.0",
+  "dependencies": {
+    "@traqula/parser-sparql-1-1": "^1.1.8",
+    "swr": "^2.4.2"
+  },
+  "peerDependencies": {
+    "@gnolith/diamond": ">=0.3.2 <0.4.0",
+    "@gnolith/taproot": ">=0.1.0 <0.2.0",
+    "@gnolith/waystone": ">=0.1.0 <0.2.0",
+    "react": ">=19 <20"
+  },
+  "peerDependenciesMeta": {
+    "@gnolith/diamond": {
+      "optional": true
+    },
+    "@gnolith/taproot": {
+      "optional": true
+    },
+    "@gnolith/waystone": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "^3.2.7",
+    "axe-core": "^4.11.0",
     "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^29.1.1",
+    "miniflare": "^4.20260714.0",
     "prettier": "^3.9.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "^4.112.0"
   },
   "license": "MIT"
 }
