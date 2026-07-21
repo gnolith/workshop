@@ -9,19 +9,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadAndVerifyArtifact } from './artifact-provenance.mjs';
 
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('consumer:check must be run through npm');
 const projectRoot = process.cwd();
 const root = mkdtempSync(join(tmpdir(), 'workshop-consumer-'));
 const source = JSON.parse(readFileSync('package.json', 'utf8'));
-const output = execFileSync(
-  process.execPath,
-  [npmCli, 'pack', '--json', '--pack-destination', root],
-  { encoding: 'utf8' },
-);
-const [{ filename }] = JSON.parse(output);
-const archive = join(root, filename);
+const { archive } = await loadAndVerifyArtifact();
 writeFileSync(
   join(root, 'package.json'),
   JSON.stringify({
@@ -102,14 +97,14 @@ for (const forbidden of ['.wrangler', join('dist', 'server', 'diamond.js')]) {
     );
   }
 }
-const canaryRoot = join(root, 'canary');
+const canaryRoot = join(root, 'package-runtime-canary');
 writeFileSync(
   join(root, 'worker.ts'),
-  readFileSync('examples/codex-site-canary/worker.ts', 'utf8'),
+  readFileSync('examples/package-runtime-canary/worker.ts', 'utf8'),
 );
 writeFileSync(
   join(root, 'wrangler.jsonc'),
-  readFileSync('examples/codex-site-canary/wrangler.jsonc', 'utf8'),
+  readFileSync('examples/package-runtime-canary/wrangler.jsonc', 'utf8'),
 );
 const wranglerOutput = execFileSync(
   process.execPath,
@@ -126,11 +121,13 @@ const wranglerOutput = execFileSync(
 );
 if (/node:events|nodejs_compat/iu.test(wranglerOutput)) {
   throw new Error(
-    'Exact-tarball canary pulled Node compatibility requirements',
+    'Isolated exact-tarball Worker consumer pulled Node compatibility requirements',
   );
 }
 if (!existsSync(join(canaryRoot, 'worker.js'))) {
-  throw new Error('Exact-tarball canary did not produce a Worker bundle');
+  throw new Error(
+    'Isolated exact-tarball Worker consumer did not produce a bundle',
+  );
 }
 
 const appRoot = join(root, 'app');
@@ -219,8 +216,8 @@ execFileSync(
   { cwd: root, stdio: 'inherit' },
 );
 if (!existsSync(join(root, 'dist'))) {
-  throw new Error('vinext exact-tarball App Router canary did not build');
+  throw new Error('Isolated vinext exact-tarball consumer did not build');
 }
 console.log(
-  `consumer, Worker, and vinext exact-tarball canaries passed for ${source.name}@${source.version}`,
+  `generic, Worker, and vinext isolated package consumers passed for ${source.name}@${source.version}`,
 );

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { Miniflare } from 'miniflare';
 
-const scriptPath = 'examples/codex-site-canary/.wrangler/canary/worker.js';
+const scriptPath = '.wrangler/package-runtime-canary/worker.js';
 const miniflare = new Miniflare({
   modules: true,
   scriptPath,
@@ -50,8 +50,8 @@ try {
   const created = await call(2, 'tools/call', {
     name: 'create_task',
     arguments: {
-      description: 'Bundled Worker task',
-      prompt: 'Verify the no-compat runtime.',
+      description: 'Isolated package-runtime task',
+      prompt: 'Verify the published package in a local Worker runtime.',
     },
   });
   assert.equal(created.result.isError, false);
@@ -67,7 +67,7 @@ try {
     created.result.structuredContent.id,
   );
   console.log(
-    `bundled no-compat Worker lifecycle passed (cold initialize ${coldRequestMs}ms)`,
+    `isolated package-runtime Worker lifecycle passed (cold initialize ${coldRequestMs}ms)`,
   );
 } finally {
   await miniflare.dispose();

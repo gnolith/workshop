@@ -13,5 +13,5 @@
   role labels do not help.
 - browser call is blocked: same-origin is default; configure one intentional
   allowed origin in the runtime.
-- Worker bundle imports Node: confirm the consumer imports the correct explicit
-  subpath and does not pull test/release scripts into runtime code.
+- consumer bundle imports an unexpected runtime: confirm it imports the correct
+  explicit subpath and does not pull test/release scripts into runtime code.

@@ -30,9 +30,10 @@ The root export intentionally does not import all runtimes.
 npm install @gnolith/workshop @gnolith/diamond @gnolith/taproot react
 ```
 
-Workshop targets Node.js 22+ for development and Cloudflare Workers in
-production. It uses Web APIs and does not require the Workers Node compatibility
-flag.
+Workshop targets Node.js 22+ for development and Web API runtimes. Its published
+package is checked in isolated Worker and vinext consumers without the Workers
+Node compatibility flag. Those consumers inject or stub peer services and do
+not represent a complete Gnolith Site.
 
 ## Site integration
 
@@ -68,9 +69,9 @@ export const GET = handler;
 export const POST = handler;
 ```
 
-Apply migrations during installation/deployment. Runtime construction never
-creates tables. The installer reads `workshopMigrations`, verifies checksums,
-and materializes SQL into the Site's committed `drizzle/` directory.
+Consumers apply migrations before constructing the runtime. Runtime construction
+never creates tables. `workshopMigrations` provides the canonical ordered SQL
+and checksums; the consuming host decides how to materialize and apply it.
 
 ## Core behavior
 
@@ -93,10 +94,13 @@ npm ci
 npm run check
 ```
 
-The gate covers formatting, lint, strict types, coverage, D1 integration and
-concurrency, MCP, routes, interactive UI, build, performance, a no-compat
-Workshop Worker, exact-tarball Worker and vinext consumers, audit, readiness,
-and release-artifact invariants.
+The gate covers formatting, lint, strict types, coverage, local D1 integration
+and concurrency, MCP, routes, interactive UI, build, performance, generic
+exact-tarball validation, isolated Worker and vinext package consumers, audit,
+readiness, and release-artifact invariants. One generated tarball and its
+machine-verifiable provenance are reused by every package consumer and release
+check. Peer services in the runtime consumers are injected or stubbed. See
+[`docs/release-provenance.md`](docs/release-provenance.md).
 
 Configure the Waystone contribution with a browser-only client. Construction is
 lazy, so importing the UI never initializes a server runtime or captures host
@@ -119,10 +123,10 @@ export const workshopUi = createWorkshopPlugin({
 ```
 
 `Workshop package handoff ready` means these package-owned gates pass against
-the exact tarball. It does not mean a full Gnolith/Codex Site has been deployed
-or verified. Managed D1/R2 provisioning, full Site composition, browser/live
-MCP probes, and Codex environment verification belong to downstream Site
-integration.
+the exact tarball. It does not qualify a complete Gnolith Site. The Codex agent
+creating a Site owns four-package assembly, infrastructure and migrations,
+identity and secrets, deployment configuration, live browser/MCP/Codex probes,
+and final acceptance.
 
 ## Documentation
 

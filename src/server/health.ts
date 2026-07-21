@@ -103,7 +103,7 @@ export class HealthService {
     return {
       status: Object.values(checks).every(Boolean) ? 'ok' : 'degraded',
       schemaVersion,
-      workshopVersion: '0.1.0',
+      workshopVersion: '0.1.1',
       checks,
       tables,
       indexes,

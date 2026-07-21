@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import {
+  assertVersionIsUnambiguous,
+  loadAndVerifyArtifact,
+} from './artifact-provenance.mjs';
 
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('release:check must be run through npm');
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
 const tag = process.argv[2] ?? process.env.RELEASE_TAG;
-assert.ok(tag, 'Pass a release tag such as v0.1.0');
+assert.ok(tag, `Pass a release tag such as v${manifest.version}`);
 assert.match(
   manifest.version,
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/u,
@@ -20,12 +24,28 @@ assert.equal(
 assert.ok(
   readFileSync('CHANGELOG.md', 'utf8').includes(`## [${manifest.version}]`),
 );
-const [artifact] = JSON.parse(
-  execFileSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json'], {
-    encoding: 'utf8',
-  }),
+assertVersionIsUnambiguous(manifest);
+const { provenance } = await loadAndVerifyArtifact();
+assert.equal(
+  provenance.source.dirty,
+  false,
+  'Release provenance must be generated from a clean checkout',
 );
-const files = new Set(artifact.files.map(({ path }) => path));
+const head = git(['rev-parse', 'HEAD']);
+const tree = git(['rev-parse', 'HEAD^{tree}']);
+assert.equal(provenance.source.commit, head);
+assert.equal(provenance.source.tree, tree);
+assert.equal(
+  git(['cat-file', '-t', `refs/tags/${tag}`], true),
+  'tag',
+  `Release tag ${tag} must exist locally and be annotated`,
+);
+assert.equal(
+  git(['rev-list', '-n', '1', `refs/tags/${tag}`]),
+  head,
+  `Release tag ${tag} must resolve to the provenance commit`,
+);
+const files = new Set(provenance.artifact.files.map(({ path }) => path));
 for (const path of [
   'README.md',
   'LICENSE',
@@ -45,8 +65,23 @@ for (const path of [
   'docs/security.md',
   'docs/release-checklist.md',
   'docs/release-evidence.md',
+  'docs/release-provenance.md',
+  'docs/release-provenance.schema.json',
   'docs/package-handoff.md',
-  'examples/codex-site-canary/worker.ts',
 ])
   assert.ok(files.has(path), `packed artifact is missing ${path}`);
-console.log(`release artifact validated for ${tag}`);
+console.log(
+  `release artifact validated for ${tag} at ${provenance.source.commit} (${provenance.artifact.sha256})`,
+);
+
+function git(args, allowFailure = false) {
+  try {
+    return execFileSync('git', args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', allowFailure ? 'ignore' : 'pipe'],
+    }).trim();
+  } catch (error) {
+    if (allowFailure) return null;
+    throw error;
+  }
+}

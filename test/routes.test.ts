@@ -35,7 +35,7 @@ function request(
   });
 }
 
-describe('Worker-safe route factories', () => {
+describe('Web route factories', () => {
   it('enforces server-side auth and maps task lifecycle routes', async () => {
     const value = await runtime();
     const tasks = createTasksHandler(value);

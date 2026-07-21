@@ -57,11 +57,11 @@ const readme = readFileSync('README.md', 'utf8');
 const evidence = readFileSync('docs/release-evidence.md', 'utf8');
 assert.ok(readme.includes('@gnolith/workshop/site'));
 assert.ok(evidence.includes('Workshop package handoff ready'));
-assert.ok(
-  evidence.includes(
-    'Full Gnolith/Codex Site production verification pending downstream integration',
-  ),
-);
+assert.ok(evidence.includes('isolated package-runtime consumers'));
+assert.ok(evidence.includes('does not qualify a'));
+assert.ok(evidence.includes('complete Gnolith Site'));
+assert.ok(evidence.includes('machine-verifiable record'));
+assert.ok(existsSync('docs/release-provenance.schema.json'));
 console.log('repository readiness invariants passed');
 
 function walk(root) {

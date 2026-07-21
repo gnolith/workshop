@@ -5,7 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -17,6 +17,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -25,4 +27,14 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run release:check -- "${{ github.event.release.tag_name }}"
-      - run: npm publish --access public --provenance
+      - name: Persist immutable provenance assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          archive="$(npm run --silent artifact:path)"
+          provenance="${archive%.tgz}.provenance.json"
+          schema=".release/gnolith-workshop-${RELEASE_TAG#v}.provenance.schema.json"
+          cp docs/release-provenance.schema.json "$schema"
+          gh release upload "$RELEASE_TAG" "$provenance" "$schema"
+      - run: npm publish "$(npm run --silent artifact:path)" --access public --provenance

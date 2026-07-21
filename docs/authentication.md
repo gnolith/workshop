@@ -7,10 +7,10 @@ never consulted for authorization.
 
 Every mutation checks authorization in the route or MCP adapter before reaching
 the service. Detailed diagnostics, semantic probes, claimed-task administrative
-archive, and abandoned-claim reset require admin. MCP rejects anonymous clients;
-public deployments therefore expose no anonymous writes by default.
+archive, and abandoned-claim reset require admin. MCP rejects anonymous clients,
+so unresolved principals cannot write.
 
-Site-owner browser authentication and machine/MCP bearer authentication may use
+Consumer browser authentication and machine/MCP bearer authentication may use
 different host mechanisms but must resolve to the same transport-neutral
 principal shape. UI capability hints are presentation only. Never put access
 tokens in tasks or memories.

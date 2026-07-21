@@ -1,32 +1,54 @@
-# Workshop 0.1.0 release evidence
+# Workshop 0.1.1 release evidence
 
 ## Workshop package handoff ready
 
-Current package decision: **READY**. `npm run check` and
-`npm run release:check -- v0.1.0` passed in this working tree on 2026-07-20.
-This is a local package handoff decision, not authorization to publish.
+Current local package decision: **READY FOR REVIEW**. `npm run check` and
+`npm run artifact:verify` passed in this working tree on 2026-07-20. The stricter
+release check correctly rejects this uncommitted, untagged tree. This is not
+authorization to commit, tag, push, or publish.
 
-| Package-owned gate                           | Evidence                                                                    | Status |
-| -------------------------------------------- | --------------------------------------------------------------------------- | ------ |
-| Format, lint, strict types, tests, coverage  | Complete local gate; 36 tests                                               | PASS   |
-| D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                | PASS   |
-| SPARQL and Taproot adapter boundary          | Parser, dry-run, delegation, revision tests                                 | PASS   |
-| MCP schemas and official client              | Tool inventory plus SDK 1.29 initialize/list/call                           | PASS   |
-| Route factories, auth, health, observability | Unit and bundled Worker lifecycle tests                                     | PASS   |
-| Waystone UI                                  | Injected-client interaction, permissions, conflict, and accessibility tests | PASS   |
-| Workshop Worker no-compat build              | 640.24 KiB / 122.00 KiB gzip; no compatibility flags                        | PASS   |
-| Exact npm tarball consumers                  | 89.4 KiB package; public exports, Worker, and vinext App Router             | PASS   |
-| Performance, dependency audit, readiness     | Included in `npm run check`                                                 | PASS   |
-| Release artifact contents                    | `npm run release:check -- v0.1.0`                                           | PASS   |
+The current verification environment was Microsoft Windows NT 10.0.26200.0,
+Node.js v24.14.0, npm 11.9.0, and Git 2.45.1.windows.1. System Git supplied
+`core.autocrlf=true`; the repository `.gitattributes` policy resolved tracked
+text to `eol: lf`, and the normal `npm run format:check` command passed. CI also
+defines a bounded Windows regression that sets `core.autocrlf=true` before
+checkout and runs the same format command after `npm ci`.
+
+| Package-owned gate                           | Evidence                                                                    | Status           |
+| -------------------------------------------- | --------------------------------------------------------------------------- | ---------------- |
+| Format, lint, strict types, tests, coverage  | Complete local gate; 36 tests                                               | PASS             |
+| D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                | PASS             |
+| SPARQL and Taproot adapter boundary          | Parser, dry-run, delegation, revision tests                                 | PASS             |
+| MCP schemas and official client              | Tool inventory plus SDK 1.29 initialize/list/call                           | PASS             |
+| Route factories, auth, health, observability | Unit and isolated package-runtime lifecycle tests                           | PASS             |
+| Waystone UI                                  | Injected-client interaction, permissions, conflict, and accessibility tests | PASS             |
+| Isolated Worker package consumer             | 640.28 KiB / 122.00 KiB gzip; no compatibility flags                        | PASS             |
+| Exact npm tarball consumers                  | One prepared artifact; generic, Worker, and vinext isolated consumers       | PASS             |
+| Artifact provenance                          | Schema, commit/worktree, hashes, parsed tar manifest/exports/migrations     | PASS             |
+| Performance, dependency audit, readiness     | Included in `npm run check`                                                 | PASS             |
+| Tagged release invariant                     | Requires clean matching annotated tag; current dirty/no-tag tree rejected   | EXPECTED BLOCKED |
 
 The final command output is the source of truth if this document and a later
 working-tree state differ.
 
-## Full Gnolith/Codex Site production verification pending downstream integration
+The machine-verifiable record beside the ignored archive under `.release/` is
+the source of truth for the exact commit/worktree state, environment, artifact
+SHA-256 and npm integrity, and sorted file manifest. The current local record is
+dirty because these changes are not committed. It must be regenerated after the
+final commit and annotated tag before publication. The publish workflow retains
+the provenance and versioned schema as non-replaceable GitHub Release assets.
 
-No claim is made here for managed D1/R2, a deployed Codex Site, full
-Diamond/Taproot graph projection, a live Waystone browser, deployed MCP, or an
-intended Codex connection. Diamond 0.3.2's `node:events` import and vinext's SSR
-Node-import warning are downstream full-Site compatibility risks. They do not
-block the Workshop package handoff because Workshop's own Worker and browser
-boundaries are no-compat and exact-tarball verified.
+## Evidence boundary
+
+The Worker, vinext, and Miniflare results are isolated package-runtime consumers
+with injected or stubbed peer services. This evidence does not qualify a
+complete Gnolith Site.
+
+The vinext SSR build passed but warned about Node imports originating in vinext
+and React DOM. That counterevidence remains a full-Site compatibility item; the
+isolated package check is not evidence that a deployed Site needs no additional
+runtime configuration.
+
+The Codex agent creating a Site owns four-package assembly, managed bindings and
+migrations, host identity and secrets, deployment configuration, real graph
+projection, live Waystone/browser/MCP/Codex probes, and final acceptance.

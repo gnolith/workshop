@@ -179,7 +179,7 @@ async function dispatch(
           ? requested
           : WORKSHOP_MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: '@gnolith/workshop', version: '0.1.0' },
+        serverInfo: { name: '@gnolith/workshop', version: '0.1.1' },
         instructions:
           'Search existing tasks before creating overlapping work. Reading a task packet never claims it. All knowledge writes require the latest Taproot revision.',
       };

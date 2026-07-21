@@ -5,18 +5,26 @@
 1. Confirm the version, peer ranges, changelog, license, and public exports.
 2. Run `npm ci && npm run check` on supported Node releases.
 3. Verify migration order, checksums, clean application, and upgrade behavior.
-4. Inspect the tarball and install that exact artifact in generic, Worker, and
-   vinext App Router consumers.
-5. Confirm the Workshop Worker canary needs no Node compatibility flags.
-6. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
+4. Run `npm run artifact:prepare` once; retain its generated commit, environment,
+   SHA-256, npm integrity, and file-manifest provenance.
+5. Install that existing artifact in generic and isolated Worker/vinext
+   consumers with injected or stubbed peers, then run `artifact:verify`.
+6. Confirm the isolated Workshop package consumer needs no undeclared runtime
+   compatibility flags.
+7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-7. Run `npm run release:check -- v0.1.0`.
-8. Publish, tag, push, or deploy only with explicit authorization.
+8. Commit the final tree and create the annotated `v0.1.1` tag with explicit
+   authorization, then regenerate provenance from that clean tagged checkout.
+9. Run `npm run release:check -- v0.1.1`; it must verify exact archive contents,
+   source identity, version uniqueness, the clean commit/tree, and annotated tag
+   without repacking.
+10. Persist the provenance and versioned schema as non-replaceable GitHub
+    Release assets, then publish the verified archive rather than the package
+    directory. Publishing remains separately authorization-gated.
 
-## Downstream Site production verification
+## Excluded from Workshop release acceptance
 
-The Site integration team owns managed bindings/migrations, full package
-composition, deployed HTTP/browser/MCP probes, real Taproot/Diamond projection,
-and the intended Codex connection. These checks qualify the complete Site, not
-the Workshop package handoff. See `package-handoff.md` and
-`release-evidence.md`.
+Workshop release acceptance excludes four-package Site composition,
+infrastructure provisioning, Site migration application, host identity and
+secrets, deployment configuration, live HTTP/browser/MCP/Codex probes, and final
+Site approval. The Codex agent creating the Site owns those checks.

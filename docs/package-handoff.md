@@ -13,18 +13,13 @@ browser endpoints used by the injected onboarding and MCP-status controllers.
 Workshop runtime construction never provisions infrastructure or applies
 migrations.
 
-## Full Gnolith/Codex Site production verification pending downstream integration
+## Ownership boundary
 
-Downstream integration must still:
+Workshop may install its exact tarball in isolated Worker, vinext, Miniflare,
+and generic consumers with injected or stubbed peer services. These checks
+verify the package's exports, runtime boundaries, and supported-consumer
+portability. They neither provision infrastructure nor qualify a complete Site.
 
-1. Compose exact released Diamond, Taproot, Waystone, and Workshop packages.
-2. Apply the canonical Workshop migrations to the managed Site database.
-3. Resolve Diamond 0.3.2's `node:events` import for a no-compat Worker target.
-4. Decide how to handle vinext's current SSR Node-import warning in the full
-   Worker build; Workshop's exact-tarball vinext smoke compiles but does not
-   assert full-Site Worker compatibility.
-5. Exercise real graph projection, browser identity/permissions, deployed MCP,
-   and the intended Codex environment.
-6. Feed any integration findings back into a later Workshop refinement.
-
-Those items are integration risks, not unfinished Workshop package-owned work.
+The Codex agent creating a Site owns four-package assembly, Site migrations and
+bindings, host identity/secrets/configuration, deployment, live probes, and final
+acceptance. Site-specific host assets do not belong in the Workshop package.

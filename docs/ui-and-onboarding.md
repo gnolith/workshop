@@ -2,8 +2,8 @@
 
 Use `createWorkshopPlugin(options)` and register its result through Waystone's
 public structural plugin contract. Import `@gnolith/workshop/styles.css` once
-in the Site shell. The default `workshopPlugin` uses a same-origin, read-only
-client; production hosts normally inject a client factory and the current
+in the consumer shell. The default `workshopPlugin` uses a same-origin, read-only
+client; hosts normally inject a client factory and the current
 capability set. Workshop does not import Waystone internals, server code, or D1
 from browser code.
 

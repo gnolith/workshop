@@ -4,6 +4,9 @@ import {
   createWorkshopMcpHandler,
 } from '@gnolith/workshop/site';
 
+// Isolated package-runtime fixture only. Peer services are deliberately stubbed;
+// this module is not a deployable Gnolith Site entry point.
+
 interface Env {
   DB: import('@gnolith/workshop/server').D1DatabaseLike;
   CANARY_TOKEN: string;
@@ -15,14 +18,16 @@ export default {
       db: env.DB,
       knowledge: {
         async call() {
-          throw new Error('Configure Taproot in the deployed Site runtime');
+          throw new Error(
+            'This isolated package canary injects no Taproot host',
+          );
         },
         async health() {
           return false;
         },
       },
       async executeSparql() {
-        throw new Error('Configure the Site Diamond query service');
+        throw new Error('This isolated package canary injects no Diamond host');
       },
       async resolvePrincipal(candidate) {
         if (

@@ -14,7 +14,7 @@ async function context() {
 }
 
 describe('D1 integration and concurrency', () => {
-  it('applies canonical migrations and reports production-safe health', async () => {
+  it('applies canonical migrations and reports schema health', async () => {
     const { runtime } = await context();
     const health = await new HealthService({
       db: runtime.db,

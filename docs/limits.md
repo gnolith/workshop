@@ -25,12 +25,13 @@ Limits return structured errors. Diamond also enforces algebra and byte bounds.
 fails any common operation above a deliberately generous two-second regression
 bound. On 2026-07-20 the reference run measured task search at 81.45 ms, a
 one-query packet at 75.40 ms, MCP initialization at 2.04 ms, `tools/list` at
-0.45 ms, a knowledge-service call at 0.02 ms, and the compiled UI modules at
-14,557 bytes raw / 3,142 bytes gzip. Wrangler reported the complete canary
-Worker at 640.24 KiB raw / 122.00 KiB gzip. The final run measured a 38.38 ms
-cold bundled-Worker initialize in Miniflare. These are development-machine
-baselines, not production latency promises; managed-canary evidence supersedes
-them for release decisions.
+0.45 ms, a knowledge-service call at 0.02 ms, and the compiled UI modules. The
+final boundary-alignment run measured UI modules at 43,010 bytes raw / 7,728
+bytes gzip. The isolated Workshop package consumer was 640.28 KiB raw / 122.00
+KiB gzip and initialized in 37.81 ms in local
+Miniflare. These are development-machine package regression baselines, not
+complete-Site or production latency claims.
 Workshop does not cache claims. Operators should observe packet duration, task
-search, MCP initialize/list, knowledge calls, Worker cold starts, and UI bundle
-size before raising limits.
+search, MCP initialize/list, knowledge calls, runtime startup, and UI bundle size
+before raising limits. The Site-creating agent owns deployed performance
+acceptance.

@@ -11,7 +11,7 @@
   `createWorkshopProbeHandler`
 
 Handlers accept Web `Request` and return Web `Response`, making them suitable for
-thin App Router/vinext shims and Workers. JSON routes are same-origin by default,
+thin host-framework shims. JSON routes are same-origin by default,
 enforce request limits and capabilities, return `{ error: WorkshopErrorBody }`,
 and never expose stacks. Health is safe and public; probe/diagnostics are admin.
 Task archival is revision-conditional: HTTP clients send the task's exact
