@@ -62,7 +62,7 @@ CREATE INDEX workshop_memories_updated_idx
   {
     id: '0002_revisions',
     checksum:
-      'sha256:298c155c7069bc2e02642db9c0193d29cc5a24eabe93f6595168575241cfa5f6',
+      'sha256:7c93d96a8a347c4cffa638ece281e852c53e19b18306038d4713d5354eaf57a1',
     sql: `ALTER TABLE workshop_tasks
   ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
 
@@ -70,24 +70,39 @@ ALTER TABLE workshop_memories
   ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
 
 -- Version-one rows used SQLite's CURRENT_TIMESTAMP representation while the
--- public API returns ISO timestamps.  Persist the public representation before
--- timestamp-based compare-and-swap is used against an adopted row.
+-- public API and chronological predicates use canonical ISO timestamps.
+-- Normalize every persisted legacy timestamp before either compare-and-swap or
+-- claim-cutoff comparisons are used against an adopted row.
 UPDATE workshop_tasks
-SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
+SET claimed_at = CASE
+      WHEN claimed_at IS NULL THEN NULL
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', claimed_at)
+    END,
+    completed_at = CASE
+      WHEN completed_at IS NULL THEN NULL
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', completed_at)
+    END,
+    archived_at = CASE
+      WHEN archived_at IS NULL THEN NULL
+      ELSE strftime('%Y-%m-%dT%H:%M:%fZ', archived_at)
+    END,
+    created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at),
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
 
 UPDATE workshop_memories
-SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
+SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at),
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at);
 
 UPDATE workshop_schema
 SET version = 2,
-    package_version = '0.2.1',
-    updated_at = CURRENT_TIMESTAMP
+    package_version = '0.2.2',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
   {
     id: '0003_resumable_onboarding',
     checksum:
-      'sha256:4f6ff933102eddecbac024d9e0728a60e488bdb2599df78a7fc39e92cfe9715b',
+      'sha256:cff4481636be20da891ce527f6061e668b86e34bf3616f6b95a6439468762531',
     sql: `CREATE TABLE workshop_onboarding_runs (
   key TEXT PRIMARY KEY,
   plan_json TEXT NOT NULL CHECK (json_valid(plan_json)),
@@ -131,7 +146,9 @@ CREATE INDEX workshop_onboarding_steps_state_idx
   ON workshop_onboarding_steps (run_key, state, ordinal);
 
 UPDATE workshop_schema
-SET version = 3, package_version = '0.2.1', updated_at = CURRENT_TIMESTAMP
+SET version = 3,
+    package_version = '0.2.2',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
 ] as const;

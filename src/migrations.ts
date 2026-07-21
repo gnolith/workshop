@@ -214,7 +214,7 @@ async function validateLegacySchema(
   for (const { name, sql } of tables.results ?? []) {
     const spec = expected.tables[name]!;
     const columns = await persistence
-      .prepare(`PRAGMA table_info(${quoteIdentifier(name)})`)
+      .prepare(`PRAGMA table_xinfo(${quoteIdentifier(name)})`)
       .all<ColumnInfo>();
     const actualColumns = (columns.results ?? []).map((column) => ({
       name: column.name,
@@ -222,6 +222,7 @@ async function validateLegacySchema(
       notNull: column.notnull === 1,
       defaultValue: normalizeDefault(column.dflt_value),
       primaryKey: column.pk,
+      hidden: column.hidden,
     }));
     if (JSON.stringify(actualColumns) !== JSON.stringify(spec.columns)) {
       throw adoptionError(installed, `${name} columns do not match`);
@@ -255,11 +256,15 @@ async function validateLegacySchema(
     for (const index of indexList.results ?? []) {
       if (index.origin === 'c') continue;
       const info = await persistence
-        .prepare(`PRAGMA index_info(${quoteIdentifier(index.name)})`)
-        .all<{ seqno: number; name: string }>();
+        .prepare(`PRAGMA index_xinfo(${quoteIdentifier(index.name)})`)
+        .all<IndexXInfo>();
       const columnNames = (info.results ?? [])
+        .filter(({ key }) => key === 1)
         .sort((left, right) => left.seqno - right.seqno)
-        .map(({ name: columnName }) => columnName)
+        .map(
+          ({ name: columnName, cid, desc, coll }) =>
+            `${columnName ?? `#${cid}`}:${desc}:${coll.toUpperCase()}`,
+        )
         .join(',');
       constraintIndexes.push(
         `${index.origin}:${index.unique}:${index.partial}:${columnNames}`,
@@ -273,6 +278,9 @@ async function validateLegacySchema(
         installed,
         `${name} unique/primary indexes do not match`,
       );
+    }
+    if (normalizeCreateTableSql(sql) !== expected.tableDefinitions[name]) {
+      throw adoptionError(installed, `${name} table semantics do not match`);
     }
   }
 
@@ -304,6 +312,7 @@ interface ColumnInfo {
   notnull: number;
   dflt_value: string | null;
   pk: number;
+  hidden: number;
 }
 
 interface ForeignKeyInfo {
@@ -322,6 +331,15 @@ interface IndexListInfo {
   partial: number;
 }
 
+interface IndexXInfo {
+  seqno: number;
+  cid: number;
+  name: string | null;
+  desc: number;
+  coll: string;
+  key: number;
+}
+
 interface LegacyTableSpec {
   columns: Array<{
     name: string;
@@ -329,6 +347,7 @@ interface LegacyTableSpec {
     notNull: boolean;
     defaultValue: string | null;
     primaryKey: number;
+    hidden: number;
   }>;
   checks: string[];
   foreignKeys: string[];
@@ -338,6 +357,7 @@ interface LegacyTableSpec {
 function legacySchema(installed: number): {
   tables: Record<string, LegacyTableSpec>;
   indexes: Record<string, string>;
+  tableDefinitions: Record<string, string>;
 } {
   const column = (
     name: string,
@@ -345,7 +365,14 @@ function legacySchema(installed: number): {
     notNull = false,
     defaultValue: string | null = null,
     primaryKey = 0,
-  ) => ({ name, type, notNull, defaultValue, primaryKey });
+  ) => ({
+    name,
+    type,
+    notNull,
+    defaultValue,
+    primaryKey,
+    hidden: 0,
+  });
   const taskColumns = [
     column('id', 'TEXT', false, null, 1),
     column('idempotency_key', 'TEXT'),
@@ -376,7 +403,7 @@ function legacySchema(installed: number): {
       columns: memoryColumns,
       checks: installed >= 2 ? ['revision >= 1'] : [],
       foreignKeys: [],
-      constraintIndexes: ['pk:1:0:slug'],
+      constraintIndexes: ['pk:1:0:slug:0:BINARY'],
     },
     workshop_schema: {
       columns: [
@@ -399,7 +426,10 @@ function legacySchema(installed: number): {
         ...(installed >= 2 ? ['revision >= 1'] : []),
       ],
       foreignKeys: [],
-      constraintIndexes: ['pk:1:0:id', 'u:1:0:idempotency_key'],
+      constraintIndexes: [
+        'pk:1:0:id:0:BINARY',
+        'u:1:0:idempotency_key:0:BINARY',
+      ],
     },
   };
   if (installed >= 3) {
@@ -423,7 +453,7 @@ function legacySchema(installed: number): {
         "(state = 'running' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR (state != 'running' AND lease_token IS NULL AND lease_expires_at IS NULL)",
       ],
       foreignKeys: [],
-      constraintIndexes: ['pk:1:0:key'],
+      constraintIndexes: ['pk:1:0:key:0:BINARY'],
     };
     tables.workshop_onboarding_steps = {
       columns: [
@@ -451,7 +481,10 @@ function legacySchema(installed: number): {
       foreignKeys: [
         'run_key->workshop_onboarding_runs.key:NO ACTION:CASCADE:NONE',
       ],
-      constraintIndexes: ['pk:1:0:run_key,ordinal', 'u:1:0:run_key,step_key'],
+      constraintIndexes: [
+        'pk:1:0:run_key:0:BINARY,ordinal:0:BINARY',
+        'u:1:0:run_key:0:BINARY,step_key:0:BINARY',
+      ],
     };
   }
   const indexDefinitions: Array<[string, string, string]> = [
@@ -496,7 +529,11 @@ function legacySchema(installed: number): {
       `${table}:${normalizeSql(sql)}`,
     ]),
   );
-  return { tables, indexes };
+  return {
+    tables,
+    indexes,
+    tableDefinitions: canonicalTableDefinitions(installed),
+  };
 }
 
 function adoptionError(
@@ -523,6 +560,67 @@ function normalizeDefault(value: string | null): string | null {
 
 function normalizeSql(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/gu, ' ');
+}
+
+function canonicalTableDefinitions(installed: number): Record<string, string> {
+  const definitions = createTableDefinitions(workshopMigrations[0]!.sql);
+  if (installed >= 2) {
+    const revision = 'revisionintegernotnulldefault1check(revision>=1)';
+    definitions.workshop_tasks = definitions.workshop_tasks!.replace(
+      'updated_attextnotnulldefaultcurrent_timestamp,check(',
+      `updated_attextnotnulldefaultcurrent_timestamp,${revision},check(`,
+    );
+    definitions.workshop_memories = definitions.workshop_memories!.replace(
+      /\)$/u,
+      `,${revision})`,
+    );
+  }
+  if (installed >= 3) {
+    Object.assign(
+      definitions,
+      createTableDefinitions(workshopMigrations[2]!.sql),
+    );
+  }
+  return definitions;
+}
+
+function createTableDefinitions(sql: string): Record<string, string> {
+  const definitions: Record<string, string> = {};
+  for (const statement of splitStatements(sql)) {
+    const match =
+      /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\b/iu.exec(
+        statement,
+      );
+    if (!match) continue;
+    definitions[match[1]!.toLowerCase()] = normalizeCreateTableSql(statement);
+  }
+  return definitions;
+}
+
+function normalizeCreateTableSql(sql: string): string {
+  let normalized = '';
+  let quoted = false;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index]!;
+    if (quoted) {
+      normalized += character;
+      if (character === "'" && sql[index + 1] === "'") {
+        normalized += sql[index + 1];
+        index += 1;
+      } else if (character === "'") {
+        quoted = false;
+      }
+    } else if (character === "'") {
+      quoted = true;
+      normalized += character;
+    } else if (!/\s/u.test(character)) {
+      normalized += character.toLowerCase();
+    }
+  }
+  if (quoted) throw new WorkshopMigrationError('Malformed CREATE TABLE SQL');
+  return normalized
+    .replace(/^createtableifnotexists/u, 'createtable')
+    .replace(/;$/u, '');
 }
 
 function normalizeExpression(value: string): string {

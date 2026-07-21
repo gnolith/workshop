@@ -70,6 +70,23 @@ describe('migration artifact integrity', () => {
     }
   });
 
+  it('adopts the exact historical version-two table semantics', async () => {
+    const fixture = await database();
+    try {
+      await execute(fixture.db, workshopMigrations[0]!.sql);
+      await execute(fixture.db, workshopMigrations[1]!.sql);
+      await expect(
+        applyWorkshopMigrations(fixture.db, testLedger),
+      ).resolves.toEqual({
+        previousVersion: 2,
+        version: WORKSHOP_SCHEMA_VERSION,
+        applied: [workshopMigrations[2]!.id],
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('makes freshly returned timestamp tokens usable for migrated rows', async () => {
     const fixture = await database();
     try {
@@ -90,7 +107,81 @@ describe('migration artifact integrity', () => {
                    '2026-07-20 12:00:00', '2026-07-20 12:00:00')`,
         )
         .run();
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_tasks
+           (id, description, prompt, context_queries, memory_slugs, claimed,
+            claimed_at, created_at, updated_at)
+           VALUES ('future-claim', 'Future claim', 'Do not reset', '[]', '[]', 1,
+                   '2026-07-20 13:00:00', '2026-07-20 11:00:00',
+                   '2026-07-20 13:00:00')`,
+        )
+        .run();
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_tasks
+           (id, description, prompt, context_queries, memory_slugs, claimed,
+            claimed_at, created_at, updated_at)
+           VALUES ('old-claim', 'Old claim', 'Reset this', '[]', '[]', 1,
+                   '2026-07-20 11:30:00', '2026-07-20 11:00:00',
+                   '2026-07-20 11:30:00')`,
+        )
+        .run();
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_tasks
+           (id, description, prompt, context_queries, memory_slugs, claimed,
+            completed_at, archived_at, created_at, updated_at)
+           VALUES ('legacy-finished', 'Finished', 'Already done', '[]', '[]', 0,
+                   '2026-07-20 12:10:00', '2026-07-20 12:20:00',
+                   '2026-07-20 11:00:00', '2026-07-20 12:20:00')`,
+        )
+        .run();
       await applyWorkshopMigrations(fixture.db, testLedger);
+
+      await expect(
+        fixture.db
+          .prepare(
+            `SELECT claimed_at AS claimedAt, created_at AS createdAt,
+                    updated_at AS updatedAt
+             FROM workshop_tasks WHERE id = 'future-claim'`,
+          )
+          .first(),
+      ).resolves.toEqual({
+        claimedAt: '2026-07-20T13:00:00.000Z',
+        createdAt: '2026-07-20T11:00:00.000Z',
+        updatedAt: '2026-07-20T13:00:00.000Z',
+      });
+      await expect(
+        fixture.db
+          .prepare(
+            `SELECT completed_at AS completedAt, archived_at AS archivedAt
+             FROM workshop_tasks WHERE id = 'legacy-finished'`,
+          )
+          .first(),
+      ).resolves.toEqual({
+        completedAt: '2026-07-20T12:10:00.000Z',
+        archivedAt: '2026-07-20T12:20:00.000Z',
+      });
+      await expect(
+        fixture.db
+          .prepare(
+            `SELECT created_at AS createdAt, updated_at AS updatedAt
+             FROM workshop_memories WHERE slug = 'legacy-memory'`,
+          )
+          .first(),
+      ).resolves.toEqual({
+        createdAt: '2026-07-20T12:00:00.000Z',
+        updatedAt: '2026-07-20T12:00:00.000Z',
+      });
+      const schema = await fixture.db
+        .prepare(
+          'SELECT updated_at AS updatedAt FROM workshop_schema WHERE singleton = 1',
+        )
+        .first<{ updatedAt: string }>();
+      expect(schema?.updatedAt).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
+      );
       const core = createWorkshopCore({
         persistence: fixture.db,
         knowledge: {
@@ -108,6 +199,25 @@ describe('migration artifact integrity', () => {
         }),
         clock: () => new Date('2026-07-20T12:00:01.000Z'),
       });
+
+      await expect(
+        core.tasks.resetAbandonedClaim(
+          'future-claim',
+          '2026-07-20T12:30:00.000Z',
+          'agent:admin',
+        ),
+      ).rejects.toMatchObject({ code: 'conflict' });
+      await expect(core.tasks.get('future-claim')).resolves.toMatchObject({
+        claimed: true,
+        claimedAt: '2026-07-20T13:00:00.000Z',
+      });
+      await expect(
+        core.tasks.resetAbandonedClaim(
+          'old-claim',
+          '2026-07-20T12:30:00.000Z',
+          'agent:admin',
+        ),
+      ).resolves.toMatchObject({ claimed: false, revision: 2 });
 
       const legacyMemory = await core.memories.get('legacy-memory');
       expect(legacyMemory.updatedAt).toBe('2026-07-20T12:00:00.000Z');
@@ -203,6 +313,80 @@ describe('migration artifact integrity', () => {
       ).rejects.toThrow('index ownership or definitions do not match');
     } finally {
       await indexFixture.dispose();
+    }
+  });
+
+  it('rejects hidden/generated columns and constraint-index collation drift without stamping adoption', async () => {
+    const generatedFixture = await database();
+    try {
+      await execute(generatedFixture.db, workshopMigrations[0]!.sql);
+      await generatedFixture.db
+        .prepare(
+          `ALTER TABLE workshop_memories
+           ADD COLUMN derived_slug TEXT
+           GENERATED ALWAYS AS (upper(slug)) VIRTUAL`,
+        )
+        .run();
+      await expect(
+        applyWorkshopMigrations(generatedFixture.db, testLedger),
+      ).rejects.toThrow('workshop_memories columns do not match');
+      expect(migrationRecords.get(generatedFixture.db) ?? []).toEqual([]);
+    } finally {
+      await generatedFixture.dispose();
+    }
+
+    const collationFixture = await database();
+    try {
+      const collatedSchema = workshopMigrations[0]!.sql.replace(
+        'id TEXT PRIMARY KEY,',
+        'id TEXT PRIMARY KEY COLLATE NOCASE,',
+      );
+      expect(collatedSchema).not.toBe(workshopMigrations[0]!.sql);
+      await execute(collationFixture.db, collatedSchema);
+      await expect(
+        applyWorkshopMigrations(collationFixture.db, testLedger),
+      ).rejects.toThrow('workshop_tasks unique/primary indexes do not match');
+      expect(migrationRecords.get(collationFixture.db) ?? []).toEqual([]);
+    } finally {
+      await collationFixture.dispose();
+    }
+  });
+
+  it('rejects exact table and foreign-key semantic drift without stamping adoption', async () => {
+    const tableFixture = await database();
+    try {
+      const replaceConflictSchema = workshopMigrations[0]!.sql.replace(
+        'id TEXT PRIMARY KEY,',
+        'id TEXT PRIMARY KEY ON CONFLICT REPLACE,',
+      );
+      expect(replaceConflictSchema).not.toBe(workshopMigrations[0]!.sql);
+      await execute(tableFixture.db, replaceConflictSchema);
+      await expect(
+        applyWorkshopMigrations(tableFixture.db, testLedger),
+      ).rejects.toThrow('workshop_tasks table semantics do not match');
+      expect(migrationRecords.get(tableFixture.db) ?? []).toEqual([]);
+    } finally {
+      await tableFixture.dispose();
+    }
+
+    const foreignKeyFixture = await database();
+    try {
+      await execute(foreignKeyFixture.db, workshopMigrations[0]!.sql);
+      await execute(foreignKeyFixture.db, workshopMigrations[1]!.sql);
+      const deferredForeignKeySchema = workshopMigrations[2]!.sql.replace(
+        'ON DELETE CASCADE,',
+        'ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,',
+      );
+      expect(deferredForeignKeySchema).not.toBe(workshopMigrations[2]!.sql);
+      await execute(foreignKeyFixture.db, deferredForeignKeySchema);
+      await expect(
+        applyWorkshopMigrations(foreignKeyFixture.db, testLedger),
+      ).rejects.toThrow(
+        'workshop_onboarding_steps table semantics do not match',
+      );
+      expect(migrationRecords.get(foreignKeyFixture.db) ?? []).toEqual([]);
+    } finally {
+      await foreignKeyFixture.dispose();
     }
   });
 
