@@ -4,48 +4,550 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
-  id-token: write
+permissions: {}
 
 jobs:
-  publish:
+  build-and-verify:
     if: github.repository == 'gnolith/workshop'
     runs-on: ubuntu-latest
-    environment: npm
+    outputs:
+      package_sha256: ${{ steps.assemble.outputs.package_sha256 }}
+      tag_commit: ${{ steps.tag-identity.outputs.tag_commit }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
-          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run check
       - run: npm run release:check -- "${{ github.event.release.tag_name }}"
+      - name: Resolve verified annotated tag commit
+        id: tag-identity
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          tag_ref="refs/tags/$RELEASE_TAG"
+          [[ "$(git cat-file -t "$tag_ref")" == 'tag' ]]
+          tag_commit="$(git rev-list -n 1 "$tag_ref")"
+          [[ "$tag_commit" == "$(git rev-parse HEAD)" ]]
+          [[ "$tag_commit" =~ ^[a-f0-9]{40}$ ]]
+          printf 'tag_commit=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
+      - name: Assemble immutable release boundary
+        id: assemble
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          boundary="$RUNNER_TEMP/release-boundary"
+          evidence="$RUNNER_TEMP/release-evidence"
+          mkdir -p "$boundary"
+          mkdir -p "$evidence"
+          archive="$(npm run --silent artifact:path)"
+          node --input-type=module - "$archive" "$boundary" "$evidence" <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { copyFile, readFile, writeFile } from 'node:fs/promises';
+          import { basename, join, resolve } from 'node:path';
+
+          const [sourceArchive, boundary, evidence] = process.argv.slice(2);
+          const packageManifest = JSON.parse(await readFile('package.json', 'utf8'));
+          const bytes = await readFile(sourceArchive);
+          const sha256 = createHash('sha256').update(bytes).digest('hex');
+          const base = basename(sourceArchive, '.tgz');
+          const filename = `${base}-${sha256}.tgz`;
+          const provenanceFilename = `${base}.provenance.json`;
+          const schemaFilename = `${base}.provenance.schema.json`;
+          const provenance = JSON.parse(
+            await readFile(resolve(sourceArchive.replace(/\.tgz$/u, '.provenance.json')), 'utf8'),
+          );
+          assert.equal(packageManifest.name, '@gnolith/workshop');
+          assert.equal(process.env.RELEASE_TAG, `v${packageManifest.version}`);
+          assert.equal(provenance.schemaVersion, 1);
+          assert.equal(provenance.package.name, '@gnolith/workshop');
+          assert.equal(provenance.package.version, packageManifest.version);
+          assert.equal(provenance.source.dirty, false);
+          assert.equal(provenance.artifact.filename, basename(sourceArchive));
+          assert.equal(provenance.artifact.sha256, sha256);
+          const manifest = {
+            schemaVersion: 1,
+            packageName: packageManifest.name,
+            version: packageManifest.version,
+            tag: process.env.RELEASE_TAG,
+            filename,
+            sha256,
+          };
+          await copyFile(resolve(sourceArchive), join(boundary, filename));
+          await copyFile(
+            resolve(sourceArchive.replace(/\.tgz$/u, '.provenance.json')),
+            join(evidence, provenanceFilename),
+          );
+          await copyFile(
+            resolve('docs/release-provenance.schema.json'),
+            join(evidence, schemaFilename),
+          );
+          await writeFile(
+            join(boundary, 'release-manifest.json'),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+            { encoding: 'utf8', flag: 'wx' },
+          );
+          await writeFile(process.env.GITHUB_OUTPUT, `package_sha256=${sha256}\n`, {
+            encoding: 'utf8',
+            flag: 'a',
+          });
+          NODE
+      - name: Upload verified release boundary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-boundary-${{ github.event.release.tag_name }}
+          path: ${{ runner.temp }}/release-boundary
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Upload verified provenance evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-evidence-${{ github.event.release.tag_name }}-${{ steps.assemble.outputs.package_sha256 }}
+          path: ${{ runner.temp }}/release-evidence
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    if: github.repository == 'gnolith/workshop'
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Download exact verified release boundary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-boundary-${{ github.event.release.tag_name }}
+          path: ${{ runner.temp }}/release-boundary
+      - name: Revalidate release boundary
+        id: release-boundary
+        env:
+          EXPECTED_SHA256: ${{ needs.build-and-verify.outputs.package_sha256 }}
+          EXPECTED_TAG_COMMIT: ${{ needs.build-and-verify.outputs.tag_commit }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BOUNDARY: ${{ runner.temp }}/release-boundary
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { appendFile, lstat, readFile, readdir } from 'node:fs/promises';
+          import { basename, join, resolve, sep } from 'node:path';
+          import { gunzipSync } from 'node:zlib';
+
+          const root = resolve(process.env.RELEASE_BOUNDARY);
+          const tagMatch = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$/u.exec(
+            process.env.RELEASE_TAG,
+          );
+          assert.ok(tagMatch, 'release tag must contain an unambiguous semver version');
+          const expectedVersion = tagMatch[1];
+          assert.match(process.env.EXPECTED_SHA256, /^[a-f0-9]{64}$/u);
+          const names = await readdir(root);
+          assert.equal(names.length, 2, 'release boundary must contain exactly two files');
+          assert.deepEqual(
+            [...names].sort(),
+            ['release-manifest.json', names.find((name) => name.endsWith('.tgz'))].sort(),
+            'release boundary contains an unexpected file',
+          );
+          for (const name of names) {
+            const candidate = resolve(root, name);
+            assert.ok(candidate.startsWith(`${root}${sep}`), 'file escaped release boundary');
+            const stat = await lstat(candidate);
+            assert.ok(stat.isFile() && !stat.isSymbolicLink(), `${name} must be a regular file`);
+          }
+
+          const archiveName = names.find((name) => name.endsWith('.tgz'));
+          assert.ok(archiveName, 'release boundary must contain one tgz');
+          const archive = join(root, archiveName);
+          const archiveBytes = await readFile(archive);
+          const actualSha256 = createHash('sha256').update(archiveBytes).digest('hex');
+
+          const manifest = JSON.parse(await readFile(join(root, 'release-manifest.json'), 'utf8'));
+          assert.deepEqual(
+            Object.keys(manifest).sort(),
+            ['filename', 'packageName', 'schemaVersion', 'sha256', 'tag', 'version'].sort(),
+            'release manifest contains unexpected fields',
+          );
+          assert.equal(manifest.schemaVersion, 1);
+          assert.equal(manifest.packageName, '@gnolith/workshop');
+          assert.equal(manifest.version, expectedVersion);
+          assert.equal(manifest.tag, process.env.RELEASE_TAG);
+          assert.match(manifest.sha256, /^[a-f0-9]{64}$/u);
+          assert.equal(manifest.sha256, process.env.EXPECTED_SHA256, 'manifest digest differs from build anchor');
+          assert.equal(actualSha256, manifest.sha256, 'release archive sha256 mismatch');
+          assert.equal(actualSha256, process.env.EXPECTED_SHA256, 'archive digest differs from build anchor');
+          const expectedFilename = `gnolith-workshop-${expectedVersion}-${manifest.sha256}.tgz`;
+          assert.equal(manifest.filename, expectedFilename);
+          assert.equal(archiveName, expectedFilename);
+          assert.equal(basename(archive), expectedFilename);
+
+          const tar = gunzipSync(archiveBytes);
+          let offset = 0;
+          let packageJson = null;
+          let packageJsonCount = 0;
+          const paths = new Set();
+          while (offset + 512 <= tar.length) {
+            const header = tar.subarray(offset, offset + 512);
+            if (header.every((byte) => byte === 0)) break;
+            const string = (start, length) => header.subarray(start, start + length).toString('utf8').replace(/\0.*$/u, '');
+            const name = string(0, 100);
+            const prefix = string(345, 155);
+            const path = prefix ? `${prefix}/${name}` : name;
+            assert.ok(path.length > 0, 'tar entry path must not be empty');
+            assert.doesNotMatch(path, /[\u0000-\u001f\u007f]/u, `tar entry path contains control characters: ${path}`);
+            assert.doesNotMatch(path, /\\/u, `tar entry path contains a backslash: ${path}`);
+            assert.ok(!path.startsWith('/'), `tar entry path must be relative: ${path}`);
+            assert.doesNotMatch(path, /^[A-Za-z]:/u, `tar entry path must not use a drive prefix: ${path}`);
+            assert.ok(
+              path.split('/').every((component) => component !== '' && component !== '.' && component !== '..'),
+              `tar entry path contains an unsafe component: ${path}`,
+            );
+            assert.ok(!paths.has(path), `duplicate tar entry path: ${path}`);
+            paths.add(path);
+            const sizeText = string(124, 12).trim();
+            const size = sizeText === '' ? 0 : Number.parseInt(sizeText, 8);
+            assert.ok(Number.isSafeInteger(size) && size >= 0, `invalid tar entry size for ${path}`);
+            const type = String.fromCharCode(header[156] || 48);
+            assert.ok(
+              type === '0' || type === '\0' || type === '5',
+              `tar entry must be regular or directory: ${path}`,
+            );
+            if (type === '5') assert.equal(size, 0, `tar directory entry must be empty: ${path}`);
+            const dataStart = offset + 512;
+            const dataEnd = dataStart + size;
+            assert.ok(dataEnd <= tar.length, `truncated tar entry ${path}`);
+            if (path === 'package/package.json') {
+              packageJsonCount += 1;
+              assert.ok(type === '0' || type === '\0', 'package/package.json must be a regular tar entry');
+              packageJson = JSON.parse(tar.subarray(dataStart, dataEnd).toString('utf8'));
+            }
+            offset = dataStart + Math.ceil(size / 512) * 512;
+          }
+          assert.equal(packageJsonCount, 1, 'archive must contain exactly one package/package.json');
+          assert.equal(packageJson.name, '@gnolith/workshop');
+          assert.equal(packageJson.version, expectedVersion);
+          assert.equal(packageJson.private, false);
+
+          await appendFile(process.env.GITHUB_OUTPUT, `archive=${archive}\n`, 'utf8');
+          NODE
+      - name: Check immutable npm registry state
+        # Trusts npm's verified attestation endpoint over TLS and validates DSSE identity/subject;
+        # this job does not perform local Sigstore bundle cryptographic verification.
+        id: registry-state
+        env:
+          EXPECTED_SHA256: ${{ needs.build-and-verify.outputs.package_sha256 }}
+          EXPECTED_TAG_COMMIT: ${{ needs.build-and-verify.outputs.tag_commit }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { appendFile } from 'node:fs/promises';
+
+          const packageName = '@gnolith/workshop';
+          const tagMatch = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$/u.exec(
+            process.env.RELEASE_TAG,
+          );
+          assert.ok(tagMatch, 'release tag must contain an unambiguous semver version');
+          const version = tagMatch[1];
+          assert.match(process.env.EXPECTED_SHA256, /^[a-f0-9]{64}$/u);
+          assert.match(process.env.EXPECTED_TAG_COMMIT, /^[a-f0-9]{40}$/u);
+          const metadataUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`;
+          const metadataResponse = await fetch(metadataUrl, { redirect: 'error' });
+          if (metadataResponse.status === 404) {
+            await appendFile(process.env.GITHUB_OUTPUT, 'exists=false\n', 'utf8');
+            process.exit(0);
+          }
+          assert.ok(metadataResponse.ok, `registry metadata failed: ${metadataResponse.status}`);
+          const metadata = await metadataResponse.json();
+          assert.equal(metadata.name, packageName);
+          assert.equal(metadata.version, version);
+          const tarballUrl = new URL(metadata.dist.tarball);
+          assert.equal(tarballUrl.protocol, 'https:');
+          assert.equal(tarballUrl.hostname, 'registry.npmjs.org');
+          const tarballResponse = await fetch(tarballUrl, { redirect: 'error' });
+          assert.ok(tarballResponse.ok, `registry tarball failed: ${tarballResponse.status}`);
+          const bytes = Buffer.from(await tarballResponse.arrayBuffer());
+          const sha256 = createHash('sha256').update(bytes).digest('hex');
+          const shasum = createHash('sha1').update(bytes).digest('hex');
+          const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+          assert.equal(sha256, process.env.EXPECTED_SHA256, 'published registry tarball digest mismatch');
+          assert.equal(metadata.dist.shasum, shasum, 'registry shasum mismatch');
+          assert.equal(metadata.dist.integrity, integrity, 'registry integrity mismatch');
+          assert.equal(
+            metadata.dist.attestations?.provenance?.predicateType,
+            'https://slsa.dev/provenance/v1',
+            'registry provenance descriptor missing',
+          );
+          const attestationUrl = new URL(metadata.dist.attestations.url);
+          assert.equal(attestationUrl.protocol, 'https:');
+          assert.equal(attestationUrl.hostname, 'registry.npmjs.org');
+          const attestationResponse = await fetch(attestationUrl, { redirect: 'error' });
+          assert.ok(attestationResponse.ok, `registry attestations failed: ${attestationResponse.status}`);
+          const attestationDocument = await attestationResponse.json();
+          const provenance = attestationDocument.attestations?.find(
+            ({ predicateType }) => predicateType === 'https://slsa.dev/provenance/v1',
+          );
+          assert.ok(provenance?.bundle?.dsseEnvelope?.payload, 'SLSA provenance attestation missing');
+          const statement = JSON.parse(
+            Buffer.from(provenance.bundle.dsseEnvelope.payload, 'base64').toString('utf8'),
+          );
+          const expectedSubject = `pkg:npm/${encodeURIComponent(packageName).replace('%2F', '/')}@${version}`;
+          const expectedRef = `refs/tags/v${version}`;
+          assert.equal(statement.predicateType, 'https://slsa.dev/provenance/v1');
+          assert.deepEqual(statement.subject, [
+            {
+              name: expectedSubject,
+              digest: { sha512: createHash('sha512').update(bytes).digest('hex') },
+            },
+          ]);
+          assert.deepEqual(
+            statement.predicate?.buildDefinition?.externalParameters?.workflow,
+            {
+              ref: expectedRef,
+              repository: 'https://github.com/gnolith/workshop',
+              path: '.github/workflows/release.yml',
+            },
+            'registry provenance workflow identity mismatch',
+          );
+          assert.deepEqual(
+            statement.predicate?.buildDefinition?.resolvedDependencies,
+            [
+              {
+                uri: `git+https://github.com/gnolith/workshop@${expectedRef}`,
+                digest: { gitCommit: process.env.EXPECTED_TAG_COMMIT },
+              },
+            ],
+            'registry provenance annotated-tag commit mismatch',
+          );
+          await appendFile(process.env.GITHUB_OUTPUT, 'exists=true\n', 'utf8');
+          NODE
+      - name: Publish verified package
+        if: steps.registry-state.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+          PACKAGE_ARCHIVE: ${{ steps.release-boundary.outputs.archive }}
+        run: npm publish "$PACKAGE_ARCHIVE" --ignore-scripts --access public --provenance
+
+  persist-provenance:
+    if: github.repository == 'gnolith/workshop'
+    needs: [build-and-verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Wait for exact npm registry provenance
+        # Revalidates the same npm-over-TLS DSSE identity boundary after publication;
+        # this job does not perform local Sigstore bundle cryptographic verification.
+        env:
+          EXPECTED_SHA256: ${{ needs.build-and-verify.outputs.package_sha256 }}
+          EXPECTED_TAG_COMMIT: ${{ needs.build-and-verify.outputs.tag_commit }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { setTimeout as delay } from 'node:timers/promises';
+
+          const packageName = '@gnolith/workshop';
+          const tagMatch = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$/u.exec(
+            process.env.RELEASE_TAG,
+          );
+          assert.ok(tagMatch, 'release tag must contain an unambiguous semver version');
+          const version = tagMatch[1];
+          assert.match(process.env.EXPECTED_SHA256, /^[a-f0-9]{64}$/u);
+          assert.match(process.env.EXPECTED_TAG_COMMIT, /^[a-f0-9]{40}$/u);
+          let lastError;
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
+            try {
+              await verifyRegistryPackage();
+              lastError = undefined;
+              break;
+            } catch (error) {
+              lastError = error;
+              if (attempt < 12) await delay(5_000);
+            }
+          }
+          if (lastError) throw lastError;
+
+          async function verifyRegistryPackage() {
+            const metadataUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`;
+            const metadataResponse = await fetch(metadataUrl, { redirect: 'error' });
+            assert.ok(metadataResponse.ok, `registry metadata failed: ${metadataResponse.status}`);
+            const metadata = await metadataResponse.json();
+            assert.equal(metadata.name, packageName);
+            assert.equal(metadata.version, version);
+            const tarballUrl = new URL(metadata.dist.tarball);
+            assert.equal(tarballUrl.protocol, 'https:');
+            assert.equal(tarballUrl.hostname, 'registry.npmjs.org');
+            const tarballResponse = await fetch(tarballUrl, { redirect: 'error' });
+            assert.ok(tarballResponse.ok, `registry tarball failed: ${tarballResponse.status}`);
+            const bytes = Buffer.from(await tarballResponse.arrayBuffer());
+            const sha256 = createHash('sha256').update(bytes).digest('hex');
+            const shasum = createHash('sha1').update(bytes).digest('hex');
+            const sha512Hex = createHash('sha512').update(bytes).digest('hex');
+            const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+            assert.equal(sha256, process.env.EXPECTED_SHA256, 'published registry tarball digest mismatch');
+            assert.equal(metadata.dist.shasum, shasum, 'registry shasum mismatch');
+            assert.equal(metadata.dist.integrity, integrity, 'registry integrity mismatch');
+            assert.equal(
+              metadata.dist.attestations?.provenance?.predicateType,
+              'https://slsa.dev/provenance/v1',
+              'registry provenance descriptor missing',
+            );
+            const attestationUrl = new URL(metadata.dist.attestations.url);
+            assert.equal(attestationUrl.protocol, 'https:');
+            assert.equal(attestationUrl.hostname, 'registry.npmjs.org');
+            const attestationResponse = await fetch(attestationUrl, { redirect: 'error' });
+            assert.ok(attestationResponse.ok, `registry attestations failed: ${attestationResponse.status}`);
+            const attestationDocument = await attestationResponse.json();
+            const provenance = attestationDocument.attestations?.find(
+              ({ predicateType }) => predicateType === 'https://slsa.dev/provenance/v1',
+            );
+            assert.ok(provenance?.bundle?.dsseEnvelope?.payload, 'SLSA provenance attestation missing');
+            const statement = JSON.parse(
+              Buffer.from(provenance.bundle.dsseEnvelope.payload, 'base64').toString('utf8'),
+            );
+            const expectedSubject = `pkg:npm/${encodeURIComponent(packageName).replace('%2F', '/')}@${version}`;
+            const expectedRef = `refs/tags/v${version}`;
+            assert.equal(statement.predicateType, 'https://slsa.dev/provenance/v1');
+            assert.deepEqual(statement.subject, [
+              { name: expectedSubject, digest: { sha512: sha512Hex } },
+            ]);
+            assert.deepEqual(
+              statement.predicate?.buildDefinition?.externalParameters?.workflow,
+              {
+                ref: expectedRef,
+                repository: 'https://github.com/gnolith/workshop',
+                path: '.github/workflows/release.yml',
+              },
+              'registry provenance workflow identity mismatch',
+            );
+            assert.deepEqual(
+              statement.predicate?.buildDefinition?.resolvedDependencies,
+              [
+                {
+                  uri: `git+https://github.com/gnolith/workshop@${expectedRef}`,
+                  digest: { gitCommit: process.env.EXPECTED_TAG_COMMIT },
+                },
+              ],
+              'registry provenance annotated-tag commit mismatch',
+            );
+          }
+          NODE
+      - name: Download exact verified provenance evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-evidence-${{ github.event.release.tag_name }}-${{ needs['build-and-verify'].outputs.package_sha256 }}
+          path: ${{ runner.temp }}/release-evidence
+      - name: Revalidate provenance evidence
+        id: provenance-evidence
+        env:
+          EXPECTED_SHA256: ${{ needs['build-and-verify'].outputs.package_sha256 }}
+          EXPECTED_TAG_COMMIT: ${{ needs['build-and-verify'].outputs.tag_commit }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_EVIDENCE: ${{ runner.temp }}/release-evidence
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFile, lstat, readFile, readdir } from 'node:fs/promises';
+          import { join, resolve, sep } from 'node:path';
+
+          const root = resolve(process.env.RELEASE_EVIDENCE);
+          const tagMatch = /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$/u.exec(
+            process.env.RELEASE_TAG,
+          );
+          assert.ok(tagMatch, 'release tag must contain an unambiguous semver version');
+          const version = tagMatch[1];
+          assert.match(process.env.EXPECTED_SHA256, /^[a-f0-9]{64}$/u);
+          const provenanceName = `gnolith-workshop-${version}.provenance.json`;
+          const schemaName = `gnolith-workshop-${version}.provenance.schema.json`;
+          const expectedNames = [provenanceName, schemaName].sort();
+          const names = (await readdir(root)).sort();
+          assert.deepEqual(names, expectedNames, 'provenance evidence contains an unexpected file');
+          for (const name of names) {
+            const candidate = resolve(root, name);
+            assert.ok(candidate.startsWith(`${root}${sep}`), 'file escaped provenance evidence');
+            const stat = await lstat(candidate);
+            assert.ok(stat.isFile() && !stat.isSymbolicLink(), `${name} must be a regular file`);
+          }
+
+          const provenancePath = join(root, provenanceName);
+          const schemaPath = join(root, schemaName);
+          const provenance = JSON.parse(await readFile(provenancePath, 'utf8'));
+          const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
+          assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+          assert.equal(
+            schema.$id,
+            'https://github.com/gnolith/workshop/blob/main/docs/release-provenance.schema.json',
+          );
+          assert.equal(schema.properties.schemaVersion.const, 1);
+          assert.equal(schema.properties.package.properties.name.const, '@gnolith/workshop');
+          assert.equal(schema.properties.artifact.properties.sha256.pattern, '^[0-9a-f]{64}$');
+          assert.equal(provenance.schemaVersion, 1);
+          assert.equal(provenance.package.name, '@gnolith/workshop');
+          assert.equal(provenance.package.version, version);
+          assert.equal(provenance.source.dirty, false);
+          assert.match(provenance.source.commit, /^[a-f0-9]{40}$/u);
+          assert.equal(provenance.source.commit, process.env.EXPECTED_TAG_COMMIT);
+          assert.match(provenance.source.tree, /^[a-f0-9]{40}$/u);
+          assert.equal(provenance.artifact.filename, `gnolith-workshop-${version}.tgz`);
+          assert.equal(provenance.artifact.sha256, process.env.EXPECTED_SHA256);
+          assert.ok(Number.isSafeInteger(provenance.artifact.size) && provenance.artifact.size > 0);
+
+          await appendFile(process.env.GITHUB_OUTPUT, `provenance=${provenancePath}\n`, 'utf8');
+          await appendFile(process.env.GITHUB_OUTPUT, `schema=${schemaPath}\n`, 'utf8');
+          NODE
       - name: Persist immutable provenance assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PROVENANCE_PATH: ${{ steps.provenance-evidence.outputs.provenance }}
+          SCHEMA_PATH: ${{ steps.provenance-evidence.outputs.schema }}
         run: |
-          archive="$(npm run --silent artifact:path)"
-          provenance="${archive%.tgz}.provenance.json"
-          schema=".release/gnolith-workshop-${RELEASE_TAG#v}.provenance.schema.json"
-          cp docs/release-provenance.schema.json "$schema"
-          gh release upload "$RELEASE_TAG" "$provenance" "$schema"
-      - name: Resolve verified package artifact
-        id: package-artifact
-        run: |
-          npm run artifact:verify
-          archive="$(npm run --silent artifact:path)"
-          test -f "$archive"
-          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
-      - name: Publish package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
-          PACKAGE_ARCHIVE: ${{ steps.package-artifact.outputs.archive }}
-        run: npm publish "$PACKAGE_ARCHIVE" --access public --provenance --ignore-scripts
+          set -euo pipefail
+          persist_asset() {
+            local path="$1"
+            local name
+            local ids
+            local download
+            name="$(basename "$path")"
+            ids="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$name\") | .id")"
+            if [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -gt 1 ]]; then
+              echo "duplicate release assets named $name" >&2
+              return 1
+            fi
+            if [[ -z "$ids" ]]; then
+              gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"
+              ids="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq ".assets[] | select(.name == \"$name\") | .id")"
+            fi
+            [[ "$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l)" -eq 1 ]]
+            download="$(mktemp)"
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ids" \
+              -H 'Accept: application/octet-stream' > "$download"
+            cmp --silent "$path" "$download"
+          }
+          persist_asset "$PROVENANCE_PATH"
+          persist_asset "$SCHEMA_PATH"

@@ -24,6 +24,15 @@ describe('migration artifact integrity', () => {
       const digest = createHash('sha256').update(file).digest('hex');
       expect(migration.checksum).toBe(`sha256:${digest}`);
     }
+    const packageManifest = JSON.parse(
+      readFileSync('package.json', 'utf8'),
+    ) as { version?: unknown };
+    expect(packageManifest.version).toBe('0.2.3');
+    expect(
+      workshopMigrations
+        .filter(({ id }) => id !== '0001_workshop')
+        .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
+    ).toEqual([true, true]);
   });
 
   it('keeps migration identifiers unique and monotonically ordered', () => {

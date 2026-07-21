@@ -2,7 +2,7 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
-## [0.2.2] - Unreleased
+## [0.2.3] - Unreleased
 
 ### Added
 
