@@ -1,4 +1,4 @@
-# Workshop 0.2.2 release evidence
+# Workshop 0.2.3 release evidence
 
 ## Workshop package handoff ready
 

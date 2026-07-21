@@ -1,6 +1,6 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Hosted agent tasks, memories, coordination, and tooling.",
   "type": "module",
   "private": false,

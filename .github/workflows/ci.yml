@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  release-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify release credential boundary
+        run: node .github/scripts/verify-release-boundary.mjs
+      - name: Test release source identity failures
+        run: node .github/scripts/test-release-boundary-runtime.mjs
+
   check:
     strategy:
       fail-fast: false
