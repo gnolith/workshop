@@ -1,0 +1,207 @@
+:root {
+  --workshop-border: #d8dee8;
+  --workshop-muted: #52606d;
+  --workshop-surface: #fff;
+  --workshop-error: #9b1c1c;
+}
+.workshop-screen {
+  display: grid;
+  gap: 1rem;
+  max-width: 72rem;
+}
+.workshop-panel,
+.workshop-card {
+  background: var(--workshop-surface);
+  border: 1px solid var(--workshop-border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+.workshop-stack {
+  display: grid;
+  gap: 1rem;
+}
+.workshop-card-heading {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.workshop-card-heading h1,
+.workshop-card-heading h2,
+.workshop-card-heading h3 {
+  margin-top: 0;
+}
+.workshop-stats {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+.workshop-stat {
+  background: #f5f7fa;
+  border-radius: 0.5rem;
+  display: grid;
+  padding: 0.75rem;
+}
+.workshop-stat strong {
+  font-size: 1.5rem;
+}
+.workshop-badge {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+.workshop-badge-unclaimed {
+  color: #45566c;
+}
+.workshop-badge-claimed {
+  color: #855700;
+}
+.workshop-badge-completed,
+.workshop-mcp-connected {
+  color: #17643a;
+}
+.workshop-badge-archived,
+.workshop-mcp-unknown {
+  color: #5f6670;
+}
+.workshop-mcp-unavailable,
+.workshop-mcp-unauthorized {
+  color: #9b1c1c;
+}
+.workshop-filters,
+.workshop-form {
+  display: grid;
+  gap: 1rem;
+}
+.workshop-filters {
+  grid-template-columns: minmax(12rem, 2fr) minmax(10rem, 1fr);
+}
+.workshop-form label,
+.workshop-filters label,
+.workshop-label-control,
+.workshop-fieldset label {
+  display: grid;
+  font-weight: 600;
+  gap: 0.35rem;
+}
+.workshop-form input,
+.workshop-form textarea,
+.workshop-filters input,
+.workshop-filters select,
+.workshop-label-control input,
+.workshop-fieldset input,
+.workshop-fieldset textarea {
+  border: 1px solid #98a3b3;
+  border-radius: 0.35rem;
+  font: inherit;
+  padding: 0.55rem;
+}
+.workshop-form textarea {
+  min-height: 9rem;
+  resize: vertical;
+}
+.workshop-fieldset {
+  border: 1px solid var(--workshop-border);
+  border-radius: 0.5rem;
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 1rem;
+}
+.workshop-query-editor {
+  border-left: 0.25rem solid var(--workshop-border);
+  display: grid;
+  gap: 0.75rem;
+  padding-left: 1rem;
+}
+.workshop-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.workshop-actions form {
+  display: grid;
+  gap: 0.5rem;
+}
+.workshop-actions textarea {
+  min-height: 6rem;
+}
+.workshop-loading {
+  color: var(--workshop-muted);
+}
+.workshop-success {
+  border-left: 0.3rem solid #17643a;
+  color: #17643a;
+  padding: 0.75rem;
+}
+:where(.workshop-screen, .workshop-panel, .workshop-stack, .workshop-form)
+  :where(button, input, select, textarea) {
+  font: inherit;
+}
+:where(.workshop-screen, .workshop-panel, .workshop-stack, .workshop-form)
+  :where(button, a, input, select, textarea):focus-visible {
+  outline: 0.2rem solid #2f6feb;
+  outline-offset: 0.15rem;
+}
+:where(.workshop-screen, .workshop-panel, .workshop-stack, .workshop-form)
+  button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.workshop-form button,
+.workshop-panel button {
+  justify-self: start;
+}
+.workshop-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.workshop-result,
+.workshop-prose pre {
+  max-width: 100%;
+  overflow: auto;
+}
+.workshop-error {
+  border-left: 0.3rem solid var(--workshop-error);
+  color: var(--workshop-error);
+  padding: 0.75rem;
+}
+.workshop-notice,
+.workshop-empty {
+  color: var(--workshop-muted);
+}
+.workshop-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.workshop-label {
+  font-weight: 600;
+}
+@media (max-width: 40rem) {
+  .workshop-filters {
+    grid-template-columns: 1fr;
+  }
+  .workshop-card-heading {
+    display: grid;
+  }
+  .workshop-badge {
+    justify-self: start;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --workshop-border: #394558;
+    --workshop-muted: #aeb8c6;
+    --workshop-surface: #151a22;
+  }
+  .workshop-stat {
+    background: #202733;
+  }
+}

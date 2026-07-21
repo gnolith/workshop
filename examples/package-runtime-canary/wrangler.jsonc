@@ -1,0 +1,14 @@
+{
+  // Non-deployable fixture used only with `wrangler deploy --dry-run`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gnolith-workshop-package-runtime-canary",
+  "main": "worker.ts",
+  "compatibility_date": "2026-07-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gnolith-workshop-package-runtime-canary",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+}

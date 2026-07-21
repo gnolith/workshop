@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+.wrangler/
+.release/
 *.tgz
 .env
 .env.*
