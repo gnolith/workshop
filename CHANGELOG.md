@@ -2,6 +2,14 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.3.2] - Unreleased
+
+### Changed
+
+- Correct the package release boundary so Workshop owns package provenance,
+  security, runtime, and packed-peer acceptance without requiring or performing
+  complete Gnolith Site assembly, deployment, or acceptance.
+
 ## [0.3.1] - Unreleased
 
 ### Changed

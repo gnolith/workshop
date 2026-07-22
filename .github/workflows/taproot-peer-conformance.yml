@@ -35,7 +35,7 @@ jobs:
           npm init --yes
           npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/gnolith-taproot-0.3.0.tgz" \
-            "$RUNNER_TEMP/gnolith-workshop-0.3.1.tgz" \
+            "$RUNNER_TEMP/gnolith-workshop-0.3.2.tgz" \
             "@gnolith/diamond@0.4.0" \
             "miniflare@4.20260714.0"
           cp "$GITHUB_WORKSPACE/.github/scripts/taproot-peer-conformance.ts" conformance.ts

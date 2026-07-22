@@ -1,12 +1,16 @@
-# Workshop 0.3.1 release evidence
+# Workshop 0.3.2 release evidence
 
 ## Workshop package handoff ready
 
-Current local package decision: **BLOCKED FOR PUBLICATION; READY FOR REVIEW**.
+Current local package decision: **PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE
+PENDING**.
 `npm run check` and `npm run artifact:verify` passed in this working tree on
-2026-07-21. The release policy remains mechanically blocked pending combined-
-system acceptance even after the tree is clean; a matching annotated tag is
-also required afterward. This is not authorization to tag or publish.
+2026-07-22. Public `@gnolith/taproot` 0.3.0 exposes npm SLSA provenance for the
+exact source commit `9b7eb5de694e6020ce8466e01687b8077fbf915c`. A clean matching
+annotated Workshop tag and regenerated artifact provenance remain required.
+Normal `npm publish` derives the matching tag from the package version and runs
+both the Taproot provenance gate and Workshop's clean/tagged provenance check.
+This is not authorization to tag or publish.
 
 The current verification environment was Microsoft Windows NT 10.0.26200.0,
 Node.js v24.14.0, npm 11.9.0, and Git 2.45.1.windows.1. System Git supplied
@@ -64,3 +68,4 @@ runtime configuration.
 The Codex agent creating a Site owns complete package assembly, managed bindings and
 migrations, host identity and secrets, deployment configuration, real graph
 projection, live Waystone/browser/MCP/Codex probes, and final acceptance.
+Workshop CI must not provision, deploy, assemble, or accept that complete Site.

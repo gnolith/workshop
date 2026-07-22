@@ -1,14 +1,16 @@
 # Release checklist
 
-> **Publication is mechanically blocked.** `release:check` and normal
-> `npm publish` fail until `@gnolith/taproot` 0.3 is published, Taproot policy
-> persistence issue #26 is merged, and combined-system acceptance passes. A
-> reviewed follow-up must remove the block; documentation alone cannot waive it.
+> **Publication is package-gated.** `release:check` and normal `npm publish`
+> require public, provenance-verified `@gnolith/taproot` 0.3.0 plus Workshop's
+> clean, tagged, version-consistent artifact provenance. Complete-Site
+> acceptance is neither a prerequisite nor evidence for a Workshop release.
 
 ## Workshop package handoff
 
 1. Confirm the version, peer ranges, changelog, license, and public exports.
 2. Run `npm ci && npm run check` on supported Node releases.
+   This is the package-owned full gate, including security, native SQLite,
+   persisted D1, and exact packed-peer conformance.
 3. Verify migration order, checksums, clean application, and upgrade behavior.
 4. Run `npm run artifact:prepare` once; retain its generated commit, environment,
    SHA-256, npm integrity, and file-manifest provenance.
@@ -18,11 +20,13 @@
    compatibility flags.
 7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-8. Commit the final tree and create the annotated `v0.3.1` tag with explicit
+8. Commit the final tree and create the annotated `v0.3.2` tag with explicit
    authorization, then regenerate provenance from that clean tagged checkout.
-9. Run `npm run release:check -- v0.3.1`; it must verify exact archive contents,
+9. Run `npm run release:check -- v0.3.2`; it must verify exact archive contents,
    source identity, version uniqueness, the clean commit/tree, and annotated tag
-   without repacking.
+   without repacking. Normal `npm publish` derives this tag from the package
+   version and runs both the Taproot provenance gate and the same Workshop
+   release check before publication.
 10. Persist the provenance and versioned schema as non-replaceable GitHub
     Release assets, then publish the verified archive rather than the package
     directory. Publishing remains separately authorization-gated.
@@ -33,3 +37,4 @@ Workshop release acceptance excludes complete Gnolith Site composition,
 infrastructure provisioning, Site migration application, host identity and
 secrets, deployment configuration, live HTTP/browser/MCP/Codex probes, and final
 Site approval. The Codex agent creating the Site owns those checks.
+Package CI must not provision, deploy, assemble, or accept a complete Site.
