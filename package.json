@@ -1,6 +1,6 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Hosted agent tasks, memories, coordination, and tooling.",
   "type": "module",
   "private": false,
@@ -73,7 +73,7 @@
   ],
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run release:boundary-check && npm run build && npm run performance:check && npm run parity:node-sqlite && npm run security:dev-check && npm run worker:check && npm run worker:test && npm run pack:check && npm run consumer:check && npm run artifact:verify && npm run audit:check && npm run readiness:check",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run performance:check && npm run parity:node-sqlite && npm run security:dev-check && npm run worker:check && npm run worker:test && npm run pack:check && npm run release:boundary-check && npm run consumer:check && npm run artifact:verify && npm run audit:check && npm run readiness:check",
     "artifact:path": "node scripts/artifact-path.mjs",
     "artifact:prepare": "node scripts/prepare-artifact.mjs",
     "artifact:verify": "node scripts/verify-artifact.mjs",

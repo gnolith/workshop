@@ -1,16 +1,25 @@
-# Workshop 0.3.2 release evidence
+# Workshop 0.3.3 release evidence
 
 ## Workshop package handoff ready
 
 Current local package decision: **PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE
 PENDING**.
-`npm run check` and `npm run artifact:verify` passed in this working tree on
-2026-07-22. Public `@gnolith/taproot` 0.3.0 exposes npm SLSA provenance for the
+The 0.3.3 fix-forward passed an exact clean `npm run check` and
+`npm run artifact:verify` on 2026-07-22. Public `@gnolith/taproot` 0.3.0 exposes
+npm SLSA provenance for the
 exact source commit `9b7eb5de694e6020ce8466e01687b8077fbf915c`. A clean matching
 annotated Workshop tag and regenerated artifact provenance remain required.
 Normal `npm publish` derives the matching tag from the package version and runs
 both the Taproot provenance gate and Workshop's clean/tagged provenance check.
 This is not authorization to tag or publish.
+
+The trusted tag-driven workflow creates the immutable GitHub Release only after
+the verified archive is public through npm OIDC and exact npm provenance has
+been revalidated. A manually pre-created Release is not a valid trigger.
+
+The immutable GitHub `v0.3.2` tag and Release are historical only. The OIDC
+workflow stopped before npm publication, so `@gnolith/workshop@0.3.2` and its
+npm provenance do not exist and must not be consumed.
 
 The current verification environment was Microsoft Windows NT 10.0.26200.0,
 Node.js v24.14.0, npm 11.9.0, and Git 2.45.1.windows.1. System Git supplied
@@ -21,7 +30,7 @@ checkout and runs the same format command after `npm ci`.
 
 | Package-owned gate                           | Evidence                                                                     | Status           |
 | -------------------------------------------- | ---------------------------------------------------------------------------- | ---------------- |
-| Format, lint, strict types, tests, coverage  | 107 tests; source 94.23% statements / 83.72% branches / 90.47% functions     | PASS             |
+| Format, lint, strict types, tests, coverage  | 109 tests; source 94.23% statements / 83.72% branches / 90.47% functions     | PASS             |
 | D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                 | PASS             |
 | Embedded SQLite parity                       | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention      | PASS             |
 | Released Taproot runtime boundary            | Exact 9b7 packed peer; typed, native SQLite, persisted D1 restart/read lanes | PASS             |
@@ -34,7 +43,7 @@ checkout and runs the same format command after `npm ci`.
 | Artifact provenance                          | Schema, commit/worktree, hashes, parsed tar manifest/exports/migrations      | PASS             |
 | Dev-tool compatibility and full audit        | Hono Node HTTP bridge; Sharp PNG-to-WebP; exactly zero vulnerabilities       | PASS             |
 | Performance, production audit, readiness     | Included in `npm run check`                                                  | PASS             |
-| Tagged release invariant                     | Requires clean matching annotated tag; current dirty/no-tag tree rejected    | EXPECTED BLOCKED |
+| Tagged release invariant                     | Requires clean matching annotated tag; current clean/no-tag head rejected    | EXPECTED BLOCKED |
 | Complete-Site acceptance                     | Assembly, provisioning, deployment, and acceptance are host-agent owned      | OUT OF SCOPE     |
 
 The final command output is the source of truth if this document and a later

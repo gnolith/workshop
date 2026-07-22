@@ -2,7 +2,19 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
-## [0.3.2] - Unreleased
+## [0.3.3] - Unreleased
+
+### Fixed
+
+- Run the real publish dry-run boundary after clean artifact preparation and
+  distinguish the expected untagged failure from successful tagged validation.
+- Trigger OIDC publication from an annotated version tag and create the
+  immutable GitHub Release only after npm publication and provenance succeed.
+
+## [0.3.2] - GitHub-only 2026-07-22
+
+> The immutable GitHub tag and Release exist, but npm `0.3.2` was never
+> published: its OIDC workflow stopped at the pre-publication package gate.
 
 ### Changed
 

@@ -27,9 +27,11 @@ checksums against the packed compiled manifest.
 `release:check` is stricter than local verification. It requires a clean source
 state, provenance commit/tree equal to the current `HEAD`, and an existing
 annotated version tag that resolves to that commit. It is expected to fail in an
-uncommitted review tree. The release workflow fetches full history and tags,
-uploads the provenance and versioned schema as non-replaceable GitHub Release
-assets, then publishes the same verified `.tgz` directly.
+uncommitted review tree. An annotated version-tag push runs the trusted workflow,
+publishes the same verified `.tgz` through npm OIDC, and revalidates its exact
+registry provenance. Only after those checks succeed does the workflow create
+the immutable GitHub Release with the provenance and versioned schema assets.
+A manually pre-created Release is rejected rather than used as a trigger.
 
 The version-history check compares package-producing inputs with every reachable
 commit that declared the same version. Material package changes require a new

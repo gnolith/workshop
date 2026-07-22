@@ -16,11 +16,11 @@ const releasePolicy = await readFile(
 );
 const workflowSha256 = createHash('sha256').update(workflow).digest('hex');
 const expectedWorkflowSha256 =
-  '8d8e4dfcd45e85a4db7c5bcffdf692ba2275df609b7d48981c7e60cbac96175c';
+  '9177c8dbf0a75c85e79389f24390c0d83bdad8937a763ca1fa661ac3064f1315';
 
 const build = job('build-and-verify', 'publish');
-const publish = job('publish', 'persist-provenance');
-const evidence = tailJob('persist-provenance');
+const publish = job('publish', 'publish-release');
+const evidence = tailJob('publish-release');
 const jobs = workflow.slice(workflow.indexOf('\njobs:\n'));
 
 assert.equal(
@@ -29,6 +29,8 @@ assert.equal(
   'release.yml changed; preserve the reviewed boundary and deliberately update its guard digest',
 );
 assert.match(workflow, /^permissions: \{\}$/mu);
+assert.match(workflow, /^on:\n  push:\n    tags:\n      - 'v\*\.\*\.\*'$/mu);
+assert.doesNotMatch(workflow, /github\.event\.release|^  release:/mu);
 assert.equal(
   count(jobs, /^  [a-z][a-z-]+:$/gmu),
   3,
@@ -59,6 +61,28 @@ assert.match(
   /no npm access token, bootstrap secret, or `NODE_AUTH_TOKEN`/u,
 );
 assert.equal(count(workflow, /assert\.deepEqual\(statement\.subject/gu), 2);
+for (const fragment of [
+  'expected exactly one SLSA provenance attestation',
+  'application/vnd.in-toto+json',
+  'SLSA provenance signature missing',
+  'https://in-toto.io/Statement/v1',
+  'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1',
+])
+  assert.equal(
+    countLiteral(workflow, fragment),
+    2,
+    `both npm provenance checks must enforce ${fragment}`,
+  );
+const exactBuildType =
+  'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1';
+assert.equal(
+  countLiteral(
+    workflow.replace(exactBuildType, exactBuildType.replace('.io', 'Xio')),
+    exactBuildType,
+  ),
+  1,
+  'build-type verification must treat dotted URL characters literally',
+);
 assert.equal(
   count(
     workflow,
@@ -72,17 +96,27 @@ ordered(build, [
   'tag_commit: ${{ steps.tag-identity.outputs.tag_commit }}',
   'permissions:\n      contents: read',
   'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4',
-  'ref: ${{ github.event.release.tag_name }}',
+  'ref: ${{ github.ref_name }}',
   'persist-credentials: false',
-  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4',
-  '- run: npm ci',
-  '- run: npm run check',
-  '- run: npm run release:check -- "${{ github.event.release.tag_name }}"',
-  '- name: Resolve verified annotated tag commit',
+  '- name: Verify annotated tag identity and main ancestry',
   '[[ "$(git cat-file -t "$tag_ref")" == \'tag\' ]]',
   'tag_commit="$(git rev-list -n 1 "$tag_ref")"',
   '[[ "$tag_commit" == "$(git rev-parse HEAD)" ]]',
+  'git fetch --no-tags origin main',
+  'git merge-base --is-ancestor "$tag_commit" origin/main',
   'printf \'tag_commit=%s\\n\' "$tag_commit" >> "$GITHUB_OUTPUT"',
+  '- name: Refuse a preexisting GitHub Release before npm publication',
+  'GH_TOKEN: ${{ github.token }}',
+  'signal: AbortSignal.timeout(30_000)',
+  "throw new Error('GitHub Release existence could not be determined');",
+  'Number.isInteger(response.status) && response.status >= 100 && response.status <= 599',
+  'if (response.status === 404)',
+  "throw new Error('GitHub Release already exists; refusing npm publication');",
+  'GitHub Release existence check failed with HTTP ${response.status}',
+  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4',
+  '- run: npm ci',
+  '- run: npm run check',
+  '- run: npm run release:check -- "${{ github.ref_name }}"',
   '- name: Assemble immutable release boundary',
   "const sha256 = createHash('sha256').update(bytes).digest('hex');",
   'const filename = `${base}-${sha256}.tgz`;',
@@ -97,19 +131,20 @@ ordered(build, [
   '`package_sha256=${sha256}\\n`',
   '- name: Upload verified release boundary',
   'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1',
-  'name: release-boundary-${{ github.event.release.tag_name }}',
+  'name: release-boundary-${{ github.ref_name }}',
   'path: ${{ runner.temp }}/release-boundary',
   'retention-days: 30',
   '- name: Upload verified provenance evidence',
   'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1',
-  'name: release-evidence-${{ github.event.release.tag_name }}-${{ steps.assemble.outputs.package_sha256 }}',
+  'name: release-evidence-${{ github.ref_name }}-${{ steps.assemble.outputs.package_sha256 }}',
   'path: ${{ runner.temp }}/release-evidence',
   'retention-days: 30',
 ]);
 assert.doesNotMatch(
   build,
-  /environment: npm|secrets\.|github\.token|GH_TOKEN|NODE_AUTH_TOKEN|npm publish/u,
+  /environment: npm|secrets\.|NODE_AUTH_TOKEN|npm publish/u,
 );
+assert.equal(count(build, /GH_TOKEN: \$\{\{ github\.token \}\}/gu), 1);
 assert.equal(count(build, /actions\/upload-artifact@/gu), 2);
 assert.equal(count(build, /retention-days: 30/gu), 2);
 
@@ -121,7 +156,7 @@ ordered(publish, [
   'registry-url: https://registry.npmjs.org',
   '- name: Download exact verified release boundary',
   'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1',
-  'name: release-boundary-${{ github.event.release.tag_name }}',
+  'name: release-boundary-${{ github.ref_name }}',
   'path: ${{ runner.temp }}/release-boundary',
   '- name: Revalidate release boundary',
   'EXPECTED_SHA256: ${{ needs.build-and-verify.outputs.package_sha256 }}',
@@ -159,8 +194,12 @@ ordered(publish, [
   "assert.equal(metadata.dist.shasum, shasum, 'registry shasum mismatch');",
   "assert.equal(metadata.dist.integrity, integrity, 'registry integrity mismatch');",
   'metadata.dist.attestations?.provenance?.predicateType,',
-  'provenance?.bundle?.dsseEnvelope?.payload',
+  "assert.equal(provenances?.length, 1, 'expected exactly one SLSA provenance attestation');",
+  "assert.equal(provenance.bundle?.dsseEnvelope?.payloadType, 'application/vnd.in-toto+json');",
+  "assert.ok(provenance.bundle.dsseEnvelope.signatures?.length > 0, 'SLSA provenance signature missing');",
   'const expectedRef = `refs/tags/v${version}`;',
+  "assert.equal(statement._type, 'https://in-toto.io/Statement/v1');",
+  "'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1'",
   "repository: 'https://github.com/gnolith/workshop'",
   "path: '.github/workflows/release.yml'",
   'uri: `git+https://github.com/gnolith/workshop@${expectedRef}`',
@@ -214,7 +253,7 @@ ordered(evidence, [
   'registry provenance annotated-tag commit mismatch',
   '- name: Download exact verified provenance evidence',
   'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1',
-  "name: release-evidence-${{ github.event.release.tag_name }}-${{ needs['build-and-verify'].outputs.package_sha256 }}",
+  "name: release-evidence-${{ github.ref_name }}-${{ needs['build-and-verify'].outputs.package_sha256 }}",
   '- name: Revalidate provenance evidence',
   "EXPECTED_TAG_COMMIT: ${{ needs['build-and-verify'].outputs.tag_commit }}",
   'provenance evidence contains an unexpected file',
@@ -224,13 +263,10 @@ ordered(evidence, [
   'assert.equal(provenance.source.dirty, false);',
   'assert.equal(provenance.source.commit, process.env.EXPECTED_TAG_COMMIT);',
   'assert.equal(provenance.artifact.sha256, process.env.EXPECTED_SHA256);',
-  '- name: Persist immutable provenance assets',
+  '- name: Create immutable GitHub Release last',
   'GH_TOKEN: ${{ github.token }}',
-  'if [[ "$(printf \'%s\\n\' "$ids" | sed \'/^$/d\' | wc -l)" -gt 1 ]]',
-  'if [[ -z "$ids" ]]',
-  'gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"',
-  'gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ids"',
-  'cmp --silent "$path" "$download"',
+  'gh release create "$RELEASE_TAG" "$PROVENANCE_PATH" "$SCHEMA_PATH"',
+  '--verify-tag',
 ]);
 assert.doesNotMatch(
   evidence,
@@ -238,6 +274,7 @@ assert.doesNotMatch(
 );
 assert.equal(count(evidence, /GH_TOKEN: \$\{\{ github\.token \}\}/gu), 1);
 assert.doesNotMatch(evidence, /--clobber/u);
+assert.doesNotMatch(evidence, /gh release upload/u);
 
 const recoveryMutations = [
   [
@@ -253,12 +290,17 @@ const recoveryMutations = [
     'registry mismatch acceptance',
     'published registry tarball digest mismatch',
   ],
-  ['missing asset recovery removal', 'if [[ -z "$ids" ]]'],
-  ['matching asset comparison removal', 'cmp --silent "$path" "$download"'],
   [
-    'partial asset duplicate defense removal',
-    'duplicate release assets named $name',
+    'preexisting release refusal removal',
+    "throw new Error('GitHub Release already exists; refusing npm publication');",
   ],
+  ['Release absence proof removal', 'if (response.status === 404)'],
+  ['Release API timeout removal', 'signal: AbortSignal.timeout(30_000)'],
+  [
+    'immutable release creation removal',
+    'gh release create "$RELEASE_TAG" "$PROVENANCE_PATH" "$SCHEMA_PATH"',
+  ],
+  ['annotated release verification removal', '--verify-tag'],
   [
     'source repository binding removal',
     "repository: 'https://github.com/gnolith/workshop'",
@@ -283,20 +325,20 @@ for (const [label, protectedFragment] of recoveryMutations) {
     `${label} mutation bypassed canonical guard`,
   );
 }
-const clobberMutation = workflow.replace(
-  'gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"',
-  'gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY" --clobber',
-);
-assert.match(clobberMutation, /--clobber/u);
-assert.notEqual(
-  createHash('sha256').update(clobberMutation).digest('hex'),
-  expectedWorkflowSha256,
-);
-
 console.log('release workflow credential boundary verified');
 
 function count(value, pattern) {
   return value.match(pattern)?.length ?? 0;
+}
+
+function countLiteral(value, fragment) {
+  let matches = 0;
+  let cursor = 0;
+  while ((cursor = value.indexOf(fragment, cursor)) >= 0) {
+    matches += 1;
+    cursor += fragment.length;
+  }
+  return matches;
 }
 
 function job(startName, endName) {
