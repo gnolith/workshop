@@ -2,7 +2,15 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
-## [0.4.0] - Unreleased
+## [0.4.1] - Unreleased
+
+### Fixed
+
+- Widen the optional Waystone peer range through compatible 0.2.x releases and
+  qualify the released Waystone 0.2.0 structural plugin adapter with an exact
+  disposable npm/declaration/runtime consumer.
+
+## [0.4.0] - 2026-07-22
 
 ### Added
 

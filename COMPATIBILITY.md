@@ -7,7 +7,9 @@ Workshop 0.4.x targets:
   Task, Memory, and Prompt producer registration, sealed atomic mutations,
   bounded legacy adoption, authorized hydration, durable materialization, and
   semantic-search administration.
-- Waystone plugin contract `>=0.1.0 <0.2.0`
+- Waystone plugin contract `>=0.1.0 <0.3.0`; released Waystone 0.2.x accepts
+  Workshop's structural plugin shape through its public
+  `WorkshopCompatibleWaystonePlugin` and `createWaystoneRegistry` boundary.
 - React `>=19 <20`
 - TypeScript `>=5.9 <6`
 - MCP protocol `2025-11-25`, with `2025-06-18` and `2025-03-26` negotiation
@@ -17,9 +19,13 @@ Workshop 0.4.x targets:
 - Node.js 22 or 24 for development and release tooling
 
 The exact Workshop tarball compiles in isolated vinext/Vite and Worker
-consumers. These fixtures inject or stub Diamond, Taproot, identity, and host
-bindings; they verify Workshop package compatibility only and perform no remote
-deployment. They do not assemble or qualify a complete Gnolith Site.
+consumers. A separate disposable consumer installs the exact tarball with
+public Waystone 0.2.0 and React 19 through normal npm peer resolution, compiles
+the public declarations, and registers the Workshop plugin through Waystone's
+public compatibility adapter. These fixtures inject or stub Diamond, Taproot,
+identity, and host bindings; they verify Workshop package compatibility only
+and perform no remote deployment. They do not assemble or qualify a complete
+Gnolith Site.
 
 CI also packs released Taproot 0.4.0 source commit
 `819fe054ebb867e1ca92518bfd3b1aa6c5aa277d` and checks bidirectional structural

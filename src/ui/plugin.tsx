@@ -10,6 +10,8 @@ export interface WaystoneEntityPanelProps {
   entityId?: string;
 }
 
+type EmptyPluginComponent = ComponentType<Record<string, never>>;
+
 /** Structural contract implemented by Waystone; Workshop never imports shell internals. */
 export interface WaystonePlugin {
   id: string;
@@ -23,28 +25,28 @@ export interface WaystonePlugin {
   routes: ReadonlyArray<{
     id: string;
     path: string;
-    component: ComponentType<Record<string, never>>;
+    component: EmptyPluginComponent;
   }>;
   dashboardPanels: ReadonlyArray<{
     id: string;
     title: string;
-    component: ComponentType<Record<string, never>>;
+    component: EmptyPluginComponent;
   }>;
   onboarding: ReadonlyArray<{
     id: string;
     title: string;
-    component: ComponentType<Record<string, never>>;
+    component: EmptyPluginComponent;
   }>;
   settingsPanels: ReadonlyArray<{
     id: string;
     title: string;
     capability: string;
-    component: ComponentType<Record<string, never>>;
+    component: EmptyPluginComponent;
   }>;
   entityPanels: ReadonlyArray<{
     id: string;
     title: string;
-    component: ComponentType<WaystoneEntityPanelProps>;
+    component: EmptyPluginComponent;
   }>;
 }
 
@@ -139,7 +141,7 @@ export function createWorkshopPlugin(
       {
         id: 'workshop-related-tasks',
         title: 'Related tasks',
-        component: EntityPanel,
+        component: EntityPanel as EmptyPluginComponent,
       },
     ],
   };
