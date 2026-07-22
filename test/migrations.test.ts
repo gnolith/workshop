@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Miniflare } from 'miniflare';
 import { describe, expect, it } from 'vitest';
+import { workshopPackage } from '../src/index.js';
 import {
   applyWorkshopMigrations,
   WORKSHOP_SCHEMA_VERSION,
@@ -32,7 +33,8 @@ describe('migration artifact integrity', () => {
     const packageManifest = JSON.parse(
       readFileSync('package.json', 'utf8'),
     ) as { version?: unknown };
-    expect(packageManifest.version).toBe('0.3.0');
+    expect(packageManifest.version).toBe('0.3.1');
+    expect(workshopPackage.version).toBe(packageManifest.version);
     expect(
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')

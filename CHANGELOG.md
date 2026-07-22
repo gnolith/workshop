@@ -2,6 +2,14 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.3.1] - Unreleased
+
+### Changed
+
+- Pin patched development-only `sharp@0.35.3` and
+  `@hono/node-server@2.0.11`, with mandatory Miniflare native-image and MCP
+  Node HTTP bridge compatibility smokes plus a zero-total dependency audit.
+
 ## [0.3.0] - Unreleased
 
 ### Added

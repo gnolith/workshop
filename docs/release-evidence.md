@@ -1,12 +1,12 @@
-# Workshop 0.3.0 release evidence
+# Workshop 0.3.1 release evidence
 
 ## Workshop package handoff ready
 
 Current local package decision: **BLOCKED FOR PUBLICATION; READY FOR REVIEW**.
 `npm run check` and `npm run artifact:verify` passed in this working tree on
-2026-07-21. The stricter release check correctly rejects publication until the
-tree is clean and carries a matching annotated tag. This is not authorization to
-tag or publish.
+2026-07-21. The release policy remains mechanically blocked pending combined-
+system acceptance even after the tree is clean; a matching annotated tag is
+also required afterward. This is not authorization to tag or publish.
 
 The current verification environment was Microsoft Windows NT 10.0.26200.0,
 Node.js v24.14.0, npm 11.9.0, and Git 2.45.1.windows.1. System Git supplied
@@ -28,7 +28,8 @@ checkout and runs the same format command after `npm ci`.
 | Isolated Worker package consumer             | 690.14 KiB / 131.38 KiB gzip; 37.37 ms cold initialize                       | PASS             |
 | Exact npm tarball consumers                  | One prepared artifact; generic, Worker, and vinext isolated consumers        | PASS             |
 | Artifact provenance                          | Schema, commit/worktree, hashes, parsed tar manifest/exports/migrations      | PASS             |
-| Performance, dependency audit, readiness     | Included in `npm run check`                                                  | PASS             |
+| Dev-tool compatibility and full audit        | Hono Node HTTP bridge; Sharp PNG-to-WebP; exactly zero vulnerabilities       | PASS             |
+| Performance, production audit, readiness     | Included in `npm run check`                                                  | PASS             |
 | Tagged release invariant                     | Requires clean matching annotated tag; current dirty/no-tag tree rejected    | EXPECTED BLOCKED |
 | Complete-Site acceptance                     | Assembly, provisioning, deployment, and acceptance are host-agent owned      | OUT OF SCOPE     |
 

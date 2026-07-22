@@ -27,6 +27,7 @@ describe('D1 integration and concurrency', () => {
     }).inspect();
     expect(health).toMatchObject({
       status: 'ok',
+      workshopVersion: workshopPackage.version,
       schemaVersion: WORKSHOP_SCHEMA_VERSION,
       checks: { persistence: true, d1: true },
       missingTables: [],
