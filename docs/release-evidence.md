@@ -1,13 +1,13 @@
-# Workshop 0.3.3 release evidence
+# Workshop 0.4.0 release evidence
 
 ## Workshop package handoff ready
 
 Current local package decision: **PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE
 PENDING**.
-The 0.3.3 fix-forward passed an exact clean `npm run check` and
-`npm run artifact:verify` on 2026-07-22. Public `@gnolith/taproot` 0.3.0 exposes
-npm SLSA provenance for the
-exact source commit `9b7eb5de694e6020ce8466e01687b8077fbf915c`. A clean matching
+Workshop 0.4.0 requires public `@gnolith/taproot` 0.4.0 with exact npm
+integrity `sha512-yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==`
+and npm SLSA provenance resolving annotated `v0.4.0` to source commit
+`819fe054ebb867e1ca92518bfd3b1aa6c5aa277d`. A clean matching
 annotated Workshop tag and regenerated artifact provenance remain required.
 Normal `npm publish` derives the matching tag from the package version and runs
 both the Taproot provenance gate and Workshop's clean/tagged provenance check.
@@ -28,23 +28,23 @@ text to `eol: lf`, and the normal `npm run format:check` command passed. CI also
 defines a bounded Windows regression that sets `core.autocrlf=true` before
 checkout and runs the same format command after `npm ci`.
 
-| Package-owned gate                           | Evidence                                                                     | Status           |
-| -------------------------------------------- | ---------------------------------------------------------------------------- | ---------------- |
-| Format, lint, strict types, tests, coverage  | 109 tests; source 94.23% statements / 83.72% branches / 90.47% functions     | PASS             |
-| D1 migration, schema, task/memory races      | Miniflare clean-schema and integration tests                                 | PASS             |
-| Embedded SQLite parity                       | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention      | PASS             |
-| Released Taproot runtime boundary            | Exact 9b7 packed peer; typed, native SQLite, persisted D1 restart/read lanes | PASS             |
-| Context-query and Taproot reader boundary    | Static parser, fail-closed packets, authorized-reader tests                  | PASS             |
-| MCP schemas and official client              | Tool inventory plus SDK 1.29 initialize/list/call                            | PASS             |
-| Route factories, auth, health, observability | Unit and isolated package-runtime lifecycle tests                            | PASS             |
-| Waystone UI                                  | Injected-client interaction, permissions, conflict, and accessibility tests  | PASS             |
-| Isolated Worker package consumer             | 690.14 KiB / 131.38 KiB gzip; 37.37 ms cold initialize                       | PASS             |
-| Exact npm tarball consumers                  | One prepared artifact; generic, Worker, and vinext isolated consumers        | PASS             |
-| Artifact provenance                          | Schema, commit/worktree, hashes, parsed tar manifest/exports/migrations      | PASS             |
-| Dev-tool compatibility and full audit        | Hono Node HTTP bridge; Sharp PNG-to-WebP; exactly zero vulnerabilities       | PASS             |
-| Performance, production audit, readiness     | Included in `npm run check`                                                  | PASS             |
-| Tagged release invariant                     | Requires clean matching annotated tag; current clean/no-tag head rejected    | EXPECTED BLOCKED |
-| Complete-Site acceptance                     | Assembly, provisioning, deployment, and acceptance are host-agent owned      | OUT OF SCOPE     |
+| Package-owned gate                             | Evidence                                                                    | Status           |
+| ---------------------------------------------- | --------------------------------------------------------------------------- | ---------------- |
+| Format, lint, strict types, tests, coverage    | 119 tests; source 88.33% statements / 82.35% branches / 91.30% functions    | PASS             |
+| D1 migration, schema, task/memory/prompt races | Miniflare clean-schema and integration tests                                | PASS             |
+| Embedded SQLite parity                         | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention     | PASS             |
+| Released Taproot runtime boundary              | Exact 819fe packed peer; Task/Memory/Prompt typed and runtime lanes         | PASS             |
+| Context-query and Taproot reader boundary      | Static parser, fail-closed packets, authorized-reader tests                 | PASS             |
+| MCP schemas and official client                | Tool inventory plus SDK 1.29 initialize/list/call                           | PASS             |
+| Route factories, auth, health, observability   | Unit and isolated package-runtime lifecycle tests                           | PASS             |
+| Waystone UI                                    | Injected-client interaction, permissions, conflict, and accessibility tests | PASS             |
+| Isolated Worker package consumer               | 742.64 KiB / 139.85 KiB gzip; 40.82 ms cold initialize                      | PASS             |
+| Exact npm tarball consumers                    | One prepared artifact; generic, Worker, and vinext isolated consumers       | PASS             |
+| Artifact provenance                            | Schema, commit/worktree, hashes, parsed tar manifest/exports/migrations     | PASS             |
+| Dev-tool compatibility and full audit          | Hono Node HTTP bridge; Sharp PNG-to-WebP; exactly zero vulnerabilities      | PASS             |
+| Performance, production audit, readiness       | Included in `npm run check`                                                 | PASS             |
+| Tagged release invariant                       | Requires clean matching annotated tag; current clean/no-tag head rejected   | EXPECTED BLOCKED |
+| Complete-Site acceptance                       | Assembly, provisioning, deployment, and acceptance are host-agent owned     | OUT OF SCOPE     |
 
 The final command output is the source of truth if this document and a later
 working-tree state differ.
@@ -57,11 +57,9 @@ regenerated after the final commit and annotated tag before publication. The
 publish workflow retains the provenance and versioned schema as non-replaceable
 GitHub Release assets.
 
-The exact clean-head full-gate performance run measured Task search at 485.02
-ms, a one-query packet at 307.97 ms, MCP initialization at 1.82 ms,
-`tools/list` at 0.32 ms, and an authorized Knowledge call at 0.19 ms. Compiled UI modules were
-42,828 bytes raw / 7,745 bytes gzip. These are package regression measurements,
-not complete-Site latency claims.
+Final performance and artifact measurements must be copied from the clean,
+tagged 0.4.0 gate. Historical 0.3.x measurements are not release evidence for
+this version.
 
 ## Evidence boundary
 

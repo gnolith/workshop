@@ -44,6 +44,7 @@ execFileSync(
     '--no-fund',
     '--no-save',
     diamondTarball,
+    '@gnolith/taproot@0.4.0',
     workshopTarball,
   ],
   { cwd: root, stdio: 'inherit' },
@@ -53,8 +54,10 @@ writeFileSync(
   join(root, 'claim-worker.mjs'),
   `
 import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
+import { bootstrapTaprootAuthorization, createTaprootHostWriteCapability } from '@gnolith/taproot';
 import { createHmac } from 'node:crypto';
 import { createWorkshopCore } from '@gnolith/workshop/core';
+import { createWorkshopSearchIntegrationV1 } from '@gnolith/workshop/server';
 const db = new NodeSqliteDatabase(process.argv[2], { busyTimeoutMs: 5_000 });
 const AUTH = {
   installationId: 'parity:installation', principalId: process.argv[4],
@@ -62,6 +65,10 @@ const AUTH = {
   capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write', 'admin', 'search:admin'],
   authorizationRevision: 1,
 };
+const TAPROOT = { baseIri: 'https://parity.workshop.gnolith.test' };
+const hostKey = await crypto.subtle.importKey('raw', new TextEncoder().encode('workshop-parity-host-key-32!!!!'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+const hostCapability = createTaprootHostWriteCapability(db, TAPROOT, hostKey);
+const search = await createWorkshopSearchIntegrationV1({ db, taproot: TAPROOT, hostCapability, installationId: AUTH.installationId, registrationContext: AUTH });
 const core = createWorkshopCore({
   persistence: db,
   authorization: {
@@ -86,6 +93,7 @@ const core = createWorkshopCore({
     seal: async () => { throw new Error('pagination not exercised'); },
     open: async () => { throw new Error('pagination not exercised'); },
   },
+  search,
 });
 try {
   await core.tasks.claim(process.argv[3], AUTH);
@@ -107,11 +115,13 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { readAppliedMigrations } from '@gnolith/diamond';
 import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
+import { bootstrapTaprootAuthorization, createTaprootHostWriteCapability, initializeTaproot } from '@gnolith/taproot';
 import { applyWorkshopMigrations, WORKSHOP_SCHEMA_VERSION, workshopMigrations } from '@gnolith/workshop/migrations';
 import { createWorkshopCore } from '@gnolith/workshop/core';
-import { backfillWorkshopAuthorizationBatch, HealthService } from '@gnolith/workshop/server';
+import { backfillWorkshopAuthorizationBatch, createWorkshopSearchIntegrationV1, HealthService } from '@gnolith/workshop/server';
 
 const path = join(${JSON.stringify(root)}, 'workshop.sqlite');
+const TAPROOT = { baseIri: 'https://parity.workshop.gnolith.test' };
 const AUTH = (principalId = 'owner') => ({
   installationId: 'parity:installation', principalId,
   activeWorkspaceId: 'parity:workspace', workspaceIds: ['parity:workspace'],
@@ -144,9 +154,20 @@ const options = {
     open: async () => { throw new Error('pagination not exercised'); },
   },
 };
+const searchFor = async (db, adopt = false) => {
+  const hostKey = await crypto.subtle.importKey('raw', new TextEncoder().encode('workshop-parity-host-key-32!!!!'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const hostCapability = createTaprootHostWriteCapability(db, TAPROOT, hostKey);
+  const search = await createWorkshopSearchIntegrationV1({ db, taproot: TAPROOT, hostCapability, installationId: AUTH().installationId, registrationContext: AUTH() });
+  if (adopt) for (const domain of [search.task, search.memory, search.prompt]) await domain.producer.adoptLegacyPage(AUTH(), { limit: 100 });
+  return search;
+};
 let first = new NodeSqliteDatabase(path);
+await initializeTaproot(first, TAPROOT);
+const bootstrapKey = await crypto.subtle.importKey('raw', new TextEncoder().encode('workshop-parity-host-key-32!!!!'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+await bootstrapTaprootAuthorization(first, TAPROOT, createTaprootHostWriteCapability(first, TAPROOT, bootstrapKey), AUTH().installationId);
 await applyWorkshopMigrations(first);
-let core = createWorkshopCore({ persistence: first, ...options });
+let search = await searchFor(first, true);
+let core = createWorkshopCore({ persistence: first, ...options, search });
 await assert.rejects(first.batch([
   first.prepare("INSERT INTO workshop_memories (slug, description, content, created_at, updated_at, revision) VALUES ('rollback-sentinel', 'Sentinel', 'Must roll back', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)"),
   first.prepare("INSERT INTO workshop_memories (slug, description, content, created_at, updated_at, revision) VALUES ('rollback-failure', NULL, 'Invalid', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)"),
@@ -168,7 +189,8 @@ await assert.rejects(core.memories.upsert('durable', {
 await first.close();
 
 first = new NodeSqliteDatabase(path);
-core = createWorkshopCore({ persistence: first, ...options });
+search = await searchFor(first);
+core = createWorkshopCore({ persistence: first, ...options, search });
 assert.equal((await core.tasks.get(created.id, AUTH())).description, 'Portable task');
 assert.equal((await core.memories.get('durable', AUTH())).content, 'Revision two');
 assert.deepEqual(await applyWorkshopMigrations(first), {
@@ -195,7 +217,7 @@ assert.equal(health.checks.persistence, true);
 assert.equal(health.checks.d1, true);
 
 const second = new NodeSqliteDatabase(path);
-const competing = createWorkshopCore({ persistence: second, ...options });
+const competing = createWorkshopCore({ persistence: second, ...options, search: await searchFor(second) });
 const outcomes = await Promise.allSettled([
   core.tasks.claim(created.id, AUTH('agent:first')),
   competing.tasks.claim(created.id, AUTH('agent:second')),
@@ -207,7 +229,8 @@ await second.close();
 await first.close();
 
 first = new NodeSqliteDatabase(path);
-core = createWorkshopCore({ persistence: first, ...options });
+search = await searchFor(first);
+core = createWorkshopCore({ persistence: first, ...options, search });
 const processTask = await core.tasks.create({ description: 'Process contention', prompt: 'Claim once' }, AUTH());
 await first.close();
 const workerPath = join(${JSON.stringify(root)}, 'claim-worker.mjs');
@@ -225,12 +248,16 @@ const runClaim = (principal) => new Promise((resolve, reject) => {
 const processOutcomes = await Promise.all([runClaim('process:a'), runClaim('process:b')]);
 assert.deepEqual(processOutcomes.sort(), ['fulfilled', 'rejected'].sort());
 first = new NodeSqliteDatabase(path);
-core = createWorkshopCore({ persistence: first, ...options });
+search = await searchFor(first);
+core = createWorkshopCore({ persistence: first, ...options, search });
 assert.equal((await core.tasks.get(processTask.id, AUTH())).claimed, true);
 await first.close();
 
 const legacyPath = join(${JSON.stringify(root)}, 'workshop-v1.sqlite');
 let legacy = new NodeSqliteDatabase(legacyPath);
+await initializeTaproot(legacy, TAPROOT);
+const legacyBootstrapKey = await crypto.subtle.importKey('raw', new TextEncoder().encode('workshop-parity-host-key-32!!!!'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+await bootstrapTaprootAuthorization(legacy, TAPROOT, createTaprootHostWriteCapability(legacy, TAPROOT, legacyBootstrapKey), AUTH().installationId);
 const legacyStatements = workshopMigrations[0].sql
   .split(/;\\s*(?:\\r?\\n|$)/u)
   .map((statement) => statement.trim())
@@ -250,12 +277,15 @@ assert.deepEqual(legacyRecords.map(({ adopted }) => adopted), [
   false,
   false,
   false,
+  false,
 ]);
-const legacyCore = createWorkshopCore({ persistence: legacy, ...options });
+const legacySearch = await searchFor(legacy);
+const legacyCore = createWorkshopCore({ persistence: legacy, ...options, search: legacySearch });
 await assert.rejects(legacyCore.memories.get('legacy-memory', AUTH()));
 await assert.rejects(legacyCore.tasks.get('legacy-update', AUTH()));
 await backfillWorkshopAuthorizationBatch(legacy, authorization, AUTH(), { domain: 'memory' });
 await backfillWorkshopAuthorizationBatch(legacy, authorization, AUTH(), { domain: 'task' });
+for (const domain of [legacySearch.task, legacySearch.memory, legacySearch.prompt]) await domain.producer.adoptLegacyPage(AUTH(), { limit: 100 });
 const legacyMemory = await legacyCore.memories.get('legacy-memory', AUTH());
 assert.equal((await legacyCore.memories.upsert('legacy-memory', {
   description: 'Legacy', content: 'Migrated', expectedUpdatedAt: legacyMemory.updatedAt,

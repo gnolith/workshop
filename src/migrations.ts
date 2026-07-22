@@ -170,6 +170,8 @@ function packageVersionForSchema(version: number): string | undefined {
     case 4:
     case 5:
       return '0.3.0';
+    case 6:
+      return '0.4.0';
     default:
       return undefined;
   }
@@ -190,6 +192,10 @@ async function validateLegacySchema(
   persistence: WorkshopPersistence,
   installed: number,
 ): Promise<void> {
+  if (installed === 6) {
+    await validateCanonicalSearchSchema(persistence);
+    return;
+  }
   const expected = legacySchema(installed);
   const tables = await persistence
     .prepare(
@@ -330,6 +336,130 @@ async function validateLegacySchema(
       'index ownership or definitions do not match',
     );
   }
+}
+
+async function validateCanonicalSearchSchema(
+  persistence: WorkshopPersistence,
+): Promise<void> {
+  const tables = await persistence
+    .prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name LIKE 'workshop_%' ORDER BY name",
+    )
+    .all<{ name: string; sql: string }>();
+  const expectedTables = [
+    'workshop_cursor_entries',
+    'workshop_cursor_snapshots',
+    'workshop_memories',
+    'workshop_memory_revisions',
+    'workshop_onboarding_runs',
+    'workshop_onboarding_steps',
+    'workshop_prompt_revisions',
+    'workshop_prompts',
+    'workshop_schema',
+    'workshop_task_revisions',
+    'workshop_tasks',
+  ];
+  const actualTables = tables.results.map(({ name }) => name);
+  if (JSON.stringify(actualTables) !== JSON.stringify(expectedTables))
+    throw adoptionError(installedVersionNumber(), 'table set does not match');
+
+  const requiredColumns: Record<string, readonly string[]> = {
+    workshop_tasks: [
+      'title',
+      'objective',
+      'constraints_json',
+      'acceptance_criteria_json',
+      'relationships_json',
+      'assigned_principal_id',
+      'outcome_kind',
+      'language',
+      'attribution_json',
+      'policy_revision',
+      'search_event_id',
+      'search_event_sequence',
+    ],
+    workshop_memories: [
+      'title',
+      'applicability_json',
+      'provenance_json',
+      'language',
+      'attribution_json',
+      'policy_revision',
+      'deleted_at',
+      'search_event_id',
+      'search_event_sequence',
+    ],
+    workshop_prompts: [
+      'installation_id',
+      'id',
+      'name',
+      'title',
+      'prompt_text',
+      'scope',
+      'role',
+      'variables_json',
+      'active',
+      'priority',
+      'sort_order',
+      'language',
+      'attribution_json',
+      'revision',
+      'policy_revision',
+      'owner_principal_id',
+      'workspace_id',
+      'visibility_scope',
+      'authorization_revision',
+      'created_at',
+      'updated_at',
+      'deactivated_at',
+      'deleted_at',
+      'search_event_id',
+      'search_event_sequence',
+    ],
+  };
+  for (const [table, required] of Object.entries(requiredColumns)) {
+    const columns = await persistence
+      .prepare(`PRAGMA table_xinfo(${quoteIdentifier(table)})`)
+      .all<ColumnInfo>();
+    const names = new Set(columns.results.map(({ name }) => name));
+    if (required.some((name) => !names.has(name)))
+      throw adoptionError(
+        installedVersionNumber(),
+        `${table} columns do not match`,
+      );
+  }
+
+  const indexes = await persistence
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name LIKE 'workshop_%' AND sql IS NOT NULL ORDER BY name",
+    )
+    .all<{ name: string }>();
+  const requiredIndexes = [
+    'workshop_cursor_snapshots_expiry_idx',
+    'workshop_memories_authorization_idx',
+    'workshop_memories_idempotency_idx',
+    'workshop_memories_updated_idx',
+    'workshop_memory_revisions_history_idx',
+    'workshop_onboarding_runs_state_idx',
+    'workshop_onboarding_steps_state_idx',
+    'workshop_prompt_revisions_history_idx',
+    'workshop_prompts_authorization_idx',
+    'workshop_prompts_list_idx',
+    'workshop_task_revisions_history_idx',
+    'workshop_tasks_authorization_idx',
+    'workshop_tasks_role_idx',
+    'workshop_tasks_state_idx',
+    'workshop_tasks_updated_idx',
+  ];
+  if (
+    JSON.stringify(indexes.results.map(({ name }) => name)) !==
+    JSON.stringify(requiredIndexes)
+  )
+    throw adoptionError(installedVersionNumber(), 'index set does not match');
+}
+
+function installedVersionNumber(): number {
+  return 6;
 }
 
 interface ColumnInfo {

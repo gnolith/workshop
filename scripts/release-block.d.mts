@@ -7,6 +7,6 @@ export function verifyTaprootRelease(
   options?: TaprootReleaseVerificationOptions,
 ): Promise<{
   packageName: '@gnolith/taproot';
-  version: '0.3.0';
-  sourceCommit: '9b7eb5de694e6020ce8466e01687b8077fbf915c';
+  version: '0.4.0';
+  sourceCommit: '819fe054ebb867e1ca92518bfd3b1aa6c5aa277d';
 }>;

@@ -108,6 +108,7 @@ async function setup() {
     },
     diamondHealth: async () => true,
     cursorCodec,
+    search: fixture.search,
   });
   return { ...fixture, core, authorization, cursorCodec };
 }

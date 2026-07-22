@@ -101,7 +101,7 @@ describe('monotonic Workshop revisions', () => {
   });
 
   it('keeps legacy timestamp CAS safe when the clock is frozen', async () => {
-    const { db, authorization, dispose } = await createTestContext();
+    const { db, authorization, search, dispose } = await createTestContext();
     disposers.push(dispose);
     const frozen = new Date('2026-07-20T15:00:00.000Z');
     const core = createWorkshopCore({
@@ -111,6 +111,7 @@ describe('monotonic Workshop revisions', () => {
       cursorCodec: createTestCursorCodec(),
       diamondHealth: async () => true,
       clock: () => frozen,
+      search,
     });
     const task = await core.tasks.create(
       {

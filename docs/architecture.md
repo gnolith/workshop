@@ -1,30 +1,50 @@
 # Architecture and domain semantics
 
 Workshop sits above Diamond and Taproot. Diamond owns quads and query internals;
-Taproot owns canonical entities, revisions, and RDF projection; Workshop owns
-agent-facing tasks, memories, policy adapters, HTTP/MCP, and UI. Workshop routes
+Taproot owns canonical entities, revisions, RDF projection, and unified-search
+materialization; Workshop owns agent-facing tasks, memories, prompts, their
+canonical producer adapters, HTTP/MCP, and UI. Workshop routes
 knowledge reads only through Taproot's authorized reader. Knowledge mutations
 are currently unavailable, and no Workshop path writes RDF directly.
 
 Reads use `AuthorizedTaprootReader` bound to the same live authorization source
-that guards Task and Memory operations; raw repositories are not adapter
-surfaces. A CI lane packs the exact merged Taproot 0.3 authorization contract
+that guards Task, Memory, and Prompt operations; raw repositories are not adapter
+surfaces. A CI lane packs the exact released Taproot 0.4 producer contract
 and compiles the public boundary. This is package-runtime compatibility, not
 complete-Site assembly or acceptance.
 
 ## Tasks
 
-Tasks persist description, advisory role, prompt, context queries, memory slugs,
-claim fields, completion/archive timestamps, result, and timestamps. State is
-derived in this order: archived, completed, claimed, unclaimed. There is no
-status column, claim token, assignment, dependency graph, or ordinary unclaim.
+Tasks persist title/objective, description, constraints, acceptance criteria,
+relationships, assignment, language/attribution, advisory role, prompt, context
+queries, memory slugs, claim fields, completion/archive timestamps, typed
+outcome, and timestamps. State is derived in this order: archived, completed,
+claimed, unclaimed. There is no status column, claim token, or ordinary unclaim.
 
 Create and update share a static context-query validator. It rejects update
 forms and unsafe constructs without executing a graph query. Updates and
 archives prefer `expectedRevision` and retain `expectedUpdatedAt` as a
 compatibility token. When both are supplied, revision is authoritative. Claims
 and completion use conditional `UPDATE ... RETURNING` statements through the
-host's atomic authorization authority, so persistence owns state.
+Taproot's sealed canonical mutation coordinator, so the Workshop row, revision
+snapshot, and source event commit atomically.
+
+## Memories and Prompts
+
+Memories include title, applicability, provenance, language, attribution,
+policy revision, soft deletion, and immutable history. Prompts are a first-class
+canonical domain with ordered/priority metadata, variables, activation state,
+visibility policy, soft deletion, and immutable history. Every write requires
+the registered search integration and fails closed without it.
+
+## Unified search
+
+`createWorkshopSearchIntegrationV1` initializes Taproot materialization before
+registering the Task, Memory, and Prompt producer descriptors. Producers use
+bounded enumeration (at most 100), exact revision loads, deterministic
+projections, policy-authority authorization, and current-reference hydration.
+Legacy adoption and materialization/rebuild/semantic operations are explicit
+`search:admin` actions; normal search never performs migration or repair.
 
 ## Packets
 

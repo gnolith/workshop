@@ -1,6 +1,7 @@
 export * from './protocol/errors.js';
 export * from './protocol/tasks.js';
 export * from './protocol/memories.js';
+export * from './protocol/prompts.js';
 export * from './protocol/knowledge.js';
 export * from './protocol/client.js';
 export * from './protocol/authorization.js';
@@ -11,6 +12,7 @@ export type WorkshopCapability =
   | 'task-write'
   | 'knowledge-write'
   | 'memory-write'
+  | 'prompt-write'
   | 'admin'
   | 'search:admin';
 

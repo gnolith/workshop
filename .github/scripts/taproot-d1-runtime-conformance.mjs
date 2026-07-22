@@ -20,6 +20,7 @@ import { applyWorkshopMigrations } from '@gnolith/workshop/migrations';
 import { WorkshopError } from '@gnolith/workshop/protocol';
 import {
   backfillWorkshopAuthorizationBatch,
+  createWorkshopSearchIntegrationV1,
   inspectWorkshopAuthorizationReadiness,
 } from '@gnolith/workshop/server';
 
@@ -41,16 +42,16 @@ try {
   await db.batch([
     db.prepare(
       `INSERT INTO workshop_tasks
-       (id, description, prompt, context_queries, memory_slugs, claimed,
+       (id, title, description, prompt, context_queries, memory_slugs, claimed,
         created_at, updated_at, revision)
-       VALUES ('legacy-d1-a', 'Legacy D1 A', 'Backfill before restart', '[]',
+       VALUES ('legacy-d1-a', 'Legacy D1 A', 'Legacy D1 A', 'Backfill before restart', '[]',
                '[]', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)`,
     ),
     db.prepare(
       `INSERT INTO workshop_tasks
-       (id, description, prompt, context_queries, memory_slugs, claimed,
+       (id, title, description, prompt, context_queries, memory_slugs, claimed,
         created_at, updated_at, revision)
-       VALUES ('legacy-d1-b', 'Legacy D1 B', 'Backfill after restart', '[]',
+       VALUES ('legacy-d1-b', 'Legacy D1 B', 'Legacy D1 B', 'Backfill after restart', '[]',
                '[]', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1)`,
     ),
   ]);
@@ -104,6 +105,17 @@ try {
   assert.equal(second.items.length, 1);
   assert.notEqual(second.items[0].id, first.items[0].id);
   assert.equal(second.cursor, null);
+  for (const domain of [
+    assembly.search.task,
+    assembly.search.memory,
+    assembly.search.prompt,
+  ]) {
+    let complete = false;
+    while (!complete)
+      ({ complete } = await domain.producer.adoptLegacyPage(actor, {
+        limit: 100,
+      }));
+  }
 
   const knowledgeGuard = await createInstallationAuthorizationGuard(
     db,
@@ -290,9 +302,17 @@ async function assemble(db, capability) {
     false,
     ['encrypt', 'decrypt'],
   );
+  const search = await createWorkshopSearchIntegrationV1({
+    db,
+    taproot: options,
+    hostCapability: capability,
+    installationId,
+    registrationContext: actor,
+  });
   return {
     authority,
     capability,
+    search,
     taprootCursorCodec: createAuthorizationCursorCodec(taprootAesKey),
   };
 }
@@ -311,6 +331,7 @@ function workshop(db, assembly, readerFactory) {
     },
     diamondHealth: async () => true,
     cursorCodec: workshopCursorCodec(),
+    search: assembly.search,
   });
 }
 

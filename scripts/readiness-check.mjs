@@ -86,7 +86,7 @@ assert.ok(
   evidence.includes('Workshop CI must not provision, deploy, assemble'),
 );
 assert.ok(
-  checklist.includes('public, provenance-verified `@gnolith/taproot` 0.3.0'),
+  checklist.includes('public, provenance-verified `@gnolith/taproot` 0.4.0'),
 );
 assert.ok(checklist.includes('security, native SQLite'));
 assert.ok(checklist.includes('Normal `npm publish` derives this tag'));

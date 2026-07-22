@@ -6,20 +6,23 @@ import { verifyTaprootRelease } from '../scripts/release-block.mjs';
 import { assertPublishDryRunBoundary } from '../scripts/prepublish-check.mjs';
 
 const predicateType = 'https://slsa.dev/provenance/v1';
-const sourceCommit = '9b7eb5de694e6020ce8466e01687b8077fbf915c';
-const sha512Bytes = Buffer.alloc(64, 0xab);
+const sourceCommit = '819fe054ebb867e1ca92518bfd3b1aa6c5aa277d';
+const sha512Bytes = Buffer.from(
+  'yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==',
+  'base64',
+);
 const sha512 = sha512Bytes.toString('hex');
 
 describe('Workshop package release boundary', () => {
   const head = 'a'.repeat(40);
-  const tag = 'v0.3.3';
+  const tag = 'v0.4.0';
 
   it('accepts a successful dry run only for the annotated tag at HEAD', () => {
     expect(
       assertPublishDryRunBoundary({
         status: 0,
         output:
-          `@gnolith/taproot 0.3.0 public npm provenance verified\n` +
+          `@gnolith/taproot 0.4.0 public npm provenance verified\n` +
           `release artifact validated for ${tag} at ${head} (digest)\n`,
         tag,
         head,
@@ -34,7 +37,7 @@ describe('Workshop package release boundary', () => {
       assertPublishDryRunBoundary({
         status: 1,
         output:
-          '@gnolith/taproot 0.3.0 public npm provenance verified\n' +
+          '@gnolith/taproot 0.4.0 public npm provenance verified\n' +
           `fatal: ambiguous argument 'refs/tags/${tag}': unknown revision or path not in the working tree.\n`,
         tag,
         head,
@@ -77,7 +80,7 @@ describe('Workshop package release boundary', () => {
   it('binds the exact Taproot package digest and SLSA source identity', async () => {
     await expect(verifyFixture()).resolves.toMatchObject({
       packageName: '@gnolith/taproot',
-      version: '0.3.0',
+      version: '0.4.0',
       sourceCommit,
     });
   });
@@ -136,7 +139,7 @@ function createFixture() {
     _type: 'https://in-toto.io/Statement/v1',
     subject: [
       {
-        name: 'pkg:npm/%40gnolith/taproot@0.3.0',
+        name: 'pkg:npm/%40gnolith/taproot@0.4.0',
         digest: { sha512 },
       },
     ],
@@ -147,14 +150,14 @@ function createFixture() {
           'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1',
         externalParameters: {
           workflow: {
-            ref: 'refs/tags/v0.3.0',
+            ref: 'refs/tags/v0.4.0',
             repository: 'https://github.com/gnolith/taproot',
             path: '.github/workflows/release.yml',
           },
         },
         resolvedDependencies: [
           {
-            uri: 'git+https://github.com/gnolith/taproot@refs/tags/v0.3.0',
+            uri: 'git+https://github.com/gnolith/taproot@refs/tags/v0.4.0',
             digest: { gitCommit: sourceCommit },
           },
         ],
@@ -177,11 +180,11 @@ function createFixture() {
   };
   const metadata = {
     name: '@gnolith/taproot',
-    version: '0.3.0',
+    version: '0.4.0',
     dist: {
       integrity: `sha512-${sha512Bytes.toString('base64')}`,
       attestations: {
-        url: 'https://registry.npmjs.org/-/npm/v1/attestations/@gnolith%2ftaproot@0.3.0',
+        url: 'https://registry.npmjs.org/-/npm/v1/attestations/@gnolith%2ftaproot@0.4.0',
         provenance: { predicateType },
       },
     },

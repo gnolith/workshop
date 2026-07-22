@@ -33,15 +33,16 @@ describe('migration artifact integrity', () => {
     const packageManifest = JSON.parse(
       readFileSync('package.json', 'utf8'),
     ) as { version?: unknown };
-    expect(packageManifest.version).toBe('0.3.3');
+    expect(packageManifest.version).toBe('0.4.0');
     expect(workshopPackage.version).toBe(packageManifest.version);
     expect(
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')
         .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
-    ).toEqual([true, true, false, false]);
+    ).toEqual([true, true, false, false, false]);
     expect(workshopMigrations[3]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[4]!.sql).toContain("package_version = '0.3.0'");
+    expect(workshopMigrations[5]!.sql).toContain("package_version = '0.4.0'");
   });
 
   it('keeps migration identifiers unique and monotonically ordered', () => {

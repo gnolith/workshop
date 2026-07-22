@@ -20,7 +20,7 @@ jobs:
       - run: npm ci
       - name: Pack the authorization-foundation Taproot source
         env:
-          TAPROOT_COMMIT: 9b7eb5de694e6020ce8466e01687b8077fbf915c
+          TAPROOT_COMMIT: 819fe054ebb867e1ca92518bfd3b1aa6c5aa277d
         run: |
           git clone --filter=blob:none https://github.com/gnolith/taproot.git "$RUNNER_TEMP/taproot"
           git -C "$RUNNER_TEMP/taproot" checkout --detach "$TAPROOT_COMMIT"
@@ -34,8 +34,8 @@ jobs:
           cd "$RUNNER_TEMP/peer-consumer"
           npm init --yes
           npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund \
-            "$RUNNER_TEMP/gnolith-taproot-0.3.0.tgz" \
-            "$RUNNER_TEMP/gnolith-workshop-0.3.3.tgz" \
+            "$RUNNER_TEMP/gnolith-taproot-0.4.0.tgz" \
+            "$RUNNER_TEMP/gnolith-workshop-0.4.0.tgz" \
             "@gnolith/diamond@0.4.0" \
             "miniflare@4.20260714.0"
           cp "$GITHUB_WORKSPACE/.github/scripts/taproot-peer-conformance.ts" conformance.ts

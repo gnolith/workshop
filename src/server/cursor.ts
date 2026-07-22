@@ -25,7 +25,7 @@ export interface WorkshopCursorCodec {
 
 export interface CursorBinding {
   operation: string;
-  domain: 'task' | 'memory';
+  domain: 'task' | 'memory' | 'prompt';
   query: string;
   filters: Readonly<Record<string, unknown>>;
 }
@@ -325,7 +325,7 @@ interface SnapshotRow {
   grant_digest: string;
   authorization_revision: number;
   search_generation: number;
-  domain: 'task' | 'memory';
+  domain: 'task' | 'memory' | 'prompt';
   operation: string;
   query_digest: string;
   filters_digest: string;

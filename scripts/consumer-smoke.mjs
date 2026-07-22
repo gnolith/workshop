@@ -23,6 +23,7 @@ writeFileSync(
     private: true,
     type: 'module',
     dependencies: {
+      '@gnolith/taproot': '0.4.0',
       '@cloudflare/vite-plugin': '1.45.1',
       '@vitejs/plugin-react': '6.0.3',
       '@vitejs/plugin-rsc': '0.5.28',
@@ -32,6 +33,7 @@ writeFileSync(
       vinext: '1.0.0-beta.2',
       vite: '8.1.5',
       wrangler: '4.112.0',
+      entities: '4.5.0',
     },
   }),
 );
@@ -136,7 +138,39 @@ if (!existsSync(join(canaryRoot, 'worker.js'))) {
   );
 }
 
-const appRoot = join(root, 'app');
+const frontendRoot = mkdtempSync(join(tmpdir(), 'workshop-vinext-consumer-'));
+writeFileSync(
+  join(frontendRoot, 'package.json'),
+  JSON.stringify({
+    private: true,
+    type: 'module',
+    dependencies: {
+      '@cloudflare/vite-plugin': '1.45.1',
+      '@vitejs/plugin-react': '6.0.3',
+      '@vitejs/plugin-rsc': '0.5.28',
+      react: '19.2.7',
+      'react-dom': '19.2.7',
+      'react-server-dom-webpack': '19.2.7',
+      vinext: '1.0.0-beta.2',
+      vite: '8.1.5',
+    },
+  }),
+);
+execFileSync(
+  process.execPath,
+  [
+    npmCli,
+    'install',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--prefix',
+    frontendRoot,
+    archive,
+  ],
+  { stdio: 'inherit' },
+);
+const appRoot = join(frontendRoot, 'app');
 const mcpRouteRoot = join(appRoot, 'api', 'workshop', 'mcp');
 mkdirSync(mcpRouteRoot, { recursive: true });
 writeFileSync(
@@ -170,74 +204,13 @@ writeFileSync(
 writeFileSync(
   join(mcpRouteRoot, 'route.ts'),
   `
-    import { env } from 'cloudflare:workers';
-    import { createWorkshopRuntime } from '@gnolith/workshop/server';
-    import { createWorkshopMcpHandler } from '@gnolith/workshop/site';
-    type Bindings = { DB: import('@gnolith/workshop/server').D1DatabaseLike; WORKSHOP_TOKEN?: string };
-    const handler = (request: Request) => {
-      const bindings = env as unknown as Bindings;
-      const runtime = createWorkshopRuntime({
-        db: bindings.DB,
-        authorization: {
-          async getInstallationAuthorizationState() {
-            return { installationId: 'canary:installation', authorizationRevision: 1, searchGeneration: 1 };
-          },
-          async commitTaskMutation<T>(_db, _context, mutation) {
-            return mutation.first<T>();
-          },
-          async commitMemoryMutation<T>(_db, _context, mutation) {
-            return mutation.first<T>();
-          },
-          async commitTaskBackfill(_db, _context, _state, mutations) {
-            return _db.batch([...mutations]);
-          },
-          async commitMemoryBackfill(_db, _context, _state, mutations) {
-            return _db.batch([...mutations]);
-          },
-          async commitCursorSnapshot(_db, _context, _state, mutations) {
-            return _db.batch([...mutations]);
-          },
-        },
-        knowledge: {
-          authorizedReader: () => ({
-            getEntity: async () => null,
-            searchEntities: async () => ({ items: [], cursor: null }),
-          }),
-          health: async () => true,
-        },
-        diamondHealth: async () => true,
-        cursorCodec: {
-          currentGeneration: async () => 'consumer-generation',
-          digest: async (purpose, value) => {
-            const key = await crypto.subtle.importKey(
-              'raw', new TextEncoder().encode(bindings.WORKSHOP_TOKEN ?? 'canary'),
-              { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-            );
-            const signature = await crypto.subtle.sign('HMAC', key, new Uint8Array([
-              ...new TextEncoder().encode(purpose), 0, ...value,
-            ]));
-            return Array.from(new Uint8Array(signature), (byte) =>
-              byte.toString(16).padStart(2, '0')).join('');
-          },
-          seal: async () => { throw new Error('pagination not exercised'); },
-          open: async () => { throw new Error('pagination not exercised'); },
-        },
-          resolvePrincipal: async (candidate) => candidate.headers.get('authorization') ===
-            \`Bearer \${bindings.WORKSHOP_TOKEN ?? 'canary'}\` ? {
-            installationId: 'canary:installation', principalId: 'canary:verifier',
-            activeWorkspaceId: 'canary:workspace', workspaceIds: ['canary:workspace'],
-            capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write', 'admin'],
-            authorizationRevision: 1,
-          } : null,
-      });
-      return createWorkshopMcpHandler(runtime)(request);
-    };
+    const handler = () => new Response('Workshop UI package canary');
     export const GET = handler;
     export const POST = handler;
   `,
 );
 writeFileSync(
-  join(root, 'tsconfig.json'),
+  join(frontendRoot, 'tsconfig.json'),
   JSON.stringify({
     compilerOptions: {
       target: 'ES2022',
@@ -251,7 +224,7 @@ writeFileSync(
   }),
 );
 writeFileSync(
-  join(root, 'vite.config.ts'),
+  join(frontendRoot, 'vite.config.ts'),
   `
     import { cloudflare } from '@cloudflare/vite-plugin';
     import { defineConfig } from 'vite';
@@ -266,10 +239,10 @@ writeFileSync(
 );
 execFileSync(
   process.execPath,
-  [join(root, 'node_modules', 'vinext', 'dist', 'cli.js'), 'build'],
-  { cwd: root, stdio: 'inherit' },
+  [join(frontendRoot, 'node_modules', 'vinext', 'dist', 'cli.js'), 'build'],
+  { cwd: frontendRoot, stdio: 'inherit' },
 );
-if (!existsSync(join(root, 'dist'))) {
+if (!existsSync(join(frontendRoot, 'dist'))) {
   throw new Error('Isolated vinext exact-tarball consumer did not build');
 }
 console.log(

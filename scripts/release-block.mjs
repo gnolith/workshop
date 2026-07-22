@@ -7,9 +7,11 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const packageName = '@gnolith/taproot';
-const version = '0.3.0';
+const version = '0.4.0';
 const predicateType = 'https://slsa.dev/provenance/v1';
-const sourceCommit = '9b7eb5de694e6020ce8466e01687b8077fbf915c';
+const sourceCommit = '819fe054ebb867e1ca92518bfd3b1aa6c5aa277d';
+const exactIntegrity =
+  'sha512-yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==';
 
 export async function verifyTaprootRelease({
   fetchImpl = globalThis.fetch,
@@ -28,10 +30,7 @@ export async function verifyTaprootRelease({
   const metadata = await metadataResponse.json();
   assert.equal(metadata.name, packageName);
   assert.equal(metadata.version, version);
-  assert.match(
-    metadata.dist?.integrity ?? '',
-    /^sha512-[A-Za-z0-9+/]+={0,2}$/u,
-  );
+  assert.equal(metadata.dist?.integrity, exactIntegrity);
   const integrityBytes = Buffer.from(
     metadata.dist.integrity.slice('sha512-'.length),
     'base64',
@@ -83,7 +82,7 @@ export async function verifyTaprootRelease({
   assert.equal(statement.predicateType, predicateType);
   assert.deepEqual(statement.subject, [
     {
-      name: 'pkg:npm/%40gnolith/taproot@0.3.0',
+      name: 'pkg:npm/%40gnolith/taproot@0.4.0',
       digest: { sha512 },
     },
   ]);
@@ -94,14 +93,14 @@ export async function verifyTaprootRelease({
   assert.deepEqual(
     statement.predicate?.buildDefinition?.externalParameters?.workflow,
     {
-      ref: 'refs/tags/v0.3.0',
+      ref: 'refs/tags/v0.4.0',
       repository: 'https://github.com/gnolith/taproot',
       path: '.github/workflows/release.yml',
     },
   );
   assert.deepEqual(statement.predicate?.buildDefinition?.resolvedDependencies, [
     {
-      uri: 'git+https://github.com/gnolith/taproot@refs/tags/v0.3.0',
+      uri: 'git+https://github.com/gnolith/taproot@refs/tags/v0.4.0',
       digest: { gitCommit: sourceCommit },
     },
   ]);

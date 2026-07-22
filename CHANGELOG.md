@@ -2,6 +2,29 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.4.0] - Unreleased
+
+### Added
+
+- Canonical Task, Memory, and Prompt search producer domains using Taproot's
+  public registration, policy-authority, sealed-mutation, legacy-adoption,
+  materialization, hydration, and semantic-search contracts.
+- Durable Prompt CRUD/history plus richer Task and Memory metadata and revision
+  snapshots across protocol, HTTP, MCP, and client surfaces.
+- Search and bounded search-administration transport surfaces, including
+  rebuild, retry, adoption, and semantic lifecycle operations.
+
+### Changed
+
+- Require exact-compatible Taproot 0.4.x and Workshop schema version 6.
+- Seal every Task, Memory, and Prompt mutation atomically with its canonical
+  Taproot source event; writes fail closed when search integration is absent.
+
+### Security
+
+- Enforce source-revision/predecessor checks, policy revisions, workspace and
+  installation isolation, bounded adoption, and authorization-aware hydration.
+
 ## [0.3.3] - Unreleased
 
 ### Fixed
