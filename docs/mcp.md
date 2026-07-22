@@ -19,32 +19,17 @@ timestamp. This makes concurrent complete/archive transitions deterministic.
 
 `list_memories`, `get_memory`, `upsert_memory`.
 
-## SPARQL
-
-`validate_sparql`, `dry_run_sparql`, `query_sparql`. Normal access is read-only;
-updates, LOAD, and unapproved SERVICE targets are rejected.
-
 ## Knowledge
 
-`search_entities`, `get_entity`, `get_entities`, `create_item`,
-`create_property`, `set_label`, `set_description`, `add_alias`, `remove_alias`,
-`add_sitelink`, `remove_sitelink`, `add_statement`, `replace_statement`,
-`remove_statement`, `set_statement_rank`, `add_qualifier`, `remove_qualifier`,
-`add_reference`, `remove_reference`, `export_entity_json`.
+`search_entities`, `get_entity`, `get_entities`, `export_entity_json`.
 
-Knowledge mutations require the exact current `expectedRevision`. Results come
-from Taproot and include entity/revision metadata. `tools/list` is deterministic
-and capability-filtered. Domain failures are `isError` tool results so agents
-can correct inputs. Unknown tools remain JSON-RPC errors. Administrative claim
-reset is intentionally absent.
+Results come from Taproot's `AuthorizedTaprootReader` and include
+entity/revision metadata. Knowledge mutations and SPARQL execution are not
+registered or advertised; direct mutation calls fail closed. `tools/list` is
+deterministic and capability-filtered. Domain failures are `isError` tool
+results so agents can correct inputs. Unknown tools remain JSON-RPC errors.
+Administrative claim reset is intentionally absent.
 
-Every operation that creates a statement revision requires explicit authored
-natural-language text. `add_statement` and `replace_statement` carry it as
-`statement.text`; `set_statement_rank`, qualifier mutations, and reference
-mutations carry it as top-level `text`. Initial `create_item.claims` statements
-also require `text`. Missing, empty, Unicode-whitespace-only, and format-only
-values are rejected before Taproot is called. Workshop forwards accepted text
-byte-for-byte, so reusing unchanged text is allowed only when the caller
-resupplies it explicitly. `remove_statement` is the sole text-exempt statement
-operation because it creates no surviving statement revision. Entity JSON
-exports retain canonical statement text.
+Task context queries remain stored, statically validated metadata. Packet
+hydration returns a bounded per-query forbidden result instead of executing
+them until a scoped Diamond boundary exists.

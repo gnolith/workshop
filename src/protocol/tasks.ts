@@ -1,6 +1,7 @@
 import type { Memory } from './memories.js';
 import type { SparqlQueryResult } from './sparql.js';
 import type { WorkshopErrorBody } from './errors.js';
+import type { VisibilityScopeV1 } from './authorization.js';
 
 export interface ContextQuery {
   label?: string;
@@ -24,6 +25,11 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  installationId: string;
+  ownerPrincipalId: string;
+  workspaceId: string;
+  visibility: VisibilityScopeV1;
+  authorizationRevision: number;
 }
 
 export interface CreateTaskInput {
@@ -33,6 +39,7 @@ export interface CreateTaskInput {
   prompt: string;
   contextQueries?: ContextQuery[];
   memorySlugs?: string[];
+  visibility?: VisibilityScopeV1;
 }
 
 export interface UpdateTaskPatch {
@@ -41,6 +48,7 @@ export interface UpdateTaskPatch {
   prompt?: string;
   contextQueries?: ContextQuery[];
   memorySlugs?: string[];
+  visibility?: VisibilityScopeV1;
 }
 
 export type TaskRevisionPrecondition =

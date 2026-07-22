@@ -4,7 +4,6 @@ import { WorkshopDashboardScreen } from './dashboard-screen.js';
 import { WorkshopEntityTasksScreen } from './entity-tasks-screen.js';
 import { WorkshopMcpStatusScreen } from './mcp-status-screen.js';
 import { WorkshopMemoriesScreen } from './memories-screen.js';
-import { WorkshopOnboardingScreen } from './onboarding-screen.js';
 import { WorkshopTasksScreen } from './tasks-screen.js';
 
 export interface WaystoneEntityPanelProps {
@@ -77,16 +76,6 @@ export function createWorkshopPlugin(
       />
     );
   }
-  function OnboardingPanel() {
-    return (
-      <WorkshopOnboardingScreen
-        capabilities={capabilities}
-        {...(options.onboarding === undefined
-          ? {}
-          : { controller: options.onboarding })}
-      />
-    );
-  }
   function StatusPanel() {
     return (
       <WorkshopMcpStatusScreen
@@ -137,13 +126,7 @@ export function createWorkshopPlugin(
         component: DashboardPanel,
       },
     ],
-    onboarding: [
-      {
-        id: 'workshop-research-seed',
-        title: 'Seed research',
-        component: OnboardingPanel,
-      },
-    ],
+    onboarding: [],
     settingsPanels: [
       {
         id: 'workshop-mcp-status',

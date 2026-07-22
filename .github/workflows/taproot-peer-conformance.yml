@@ -18,35 +18,36 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Pack the statement-text Taproot source
+      - name: Pack the authorization-foundation Taproot source
         env:
-          TAPROOT_COMMIT: 38b97616da07ee349cf30877653acd84d1689139
+          TAPROOT_COMMIT: 9b7eb5de694e6020ce8466e01687b8077fbf915c
         run: |
           git clone --filter=blob:none https://github.com/gnolith/taproot.git "$RUNNER_TEMP/taproot"
           git -C "$RUNNER_TEMP/taproot" checkout --detach "$TAPROOT_COMMIT"
           test "$(git -C "$RUNNER_TEMP/taproot" rev-parse HEAD)" = "$TAPROOT_COMMIT"
           npm ci --prefix "$RUNNER_TEMP/taproot"
           npm pack "$RUNNER_TEMP/taproot" --pack-destination "$RUNNER_TEMP"
-      - name: Verify exact typed boundary between packed peers
+      - name: Install exact packed peers
         run: |
           npm pack . --pack-destination "$RUNNER_TEMP"
           mkdir "$RUNNER_TEMP/peer-consumer"
           cd "$RUNNER_TEMP/peer-consumer"
           npm init --yes
-          # The pinned source still reports its pre-release 0.2.0 package
-          # version. Bypass semver resolution only in this source-conformance
-          # fixture; Workshop's published peer floor remains the honest 0.3.x.
           npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund \
-            "$RUNNER_TEMP/gnolith-taproot-0.2.0.tgz" \
-            "$RUNNER_TEMP/gnolith-workshop-0.2.3.tgz"
-          cat > conformance.ts <<'EOF'
-          import type { TaprootRepository } from '@gnolith/taproot';
-          import type { TaprootRepositoryLike } from '@gnolith/workshop/server';
-
-          declare const actual: TaprootRepository;
-          const compatible: TaprootRepositoryLike = actual;
-          void compatible;
-          EOF
+            "$RUNNER_TEMP/gnolith-taproot-0.3.0.tgz" \
+            "$RUNNER_TEMP/gnolith-workshop-0.3.0.tgz" \
+            "@gnolith/diamond@0.4.0" \
+            "miniflare@4.20260714.0"
+          cp "$GITHUB_WORKSPACE/.github/scripts/taproot-peer-conformance.ts" conformance.ts
+          cp "$GITHUB_WORKSPACE/.github/scripts/taproot-runtime-conformance.mjs" conformance.mjs
+          cp "$GITHUB_WORKSPACE/.github/scripts/taproot-d1-runtime-conformance.mjs" conformance-d1.mjs
+      - name: Verify exact typed boundary between packed peers
+        run: |
+          cd "$RUNNER_TEMP/peer-consumer"
           node "$GITHUB_WORKSPACE/node_modules/typescript/bin/tsc" \
             --noEmit --strict --skipLibCheck --target ES2022 \
             --module NodeNext --moduleResolution NodeNext conformance.ts
+      - name: Verify packed runtime authorization guard
+        run: node "$RUNNER_TEMP/peer-consumer/conformance.mjs"
+      - name: Verify packed persisted D1 authorization guard
+        run: node "$RUNNER_TEMP/peer-consumer/conformance-d1.mjs"

@@ -85,6 +85,7 @@ for (const path of [
   'migrations/0001_workshop.sql',
   'migrations/0002_revisions.sql',
   'migrations/0003_resumable_onboarding.sql',
+  'migrations/0004_authorization.sql',
   'SECURITY.md',
 ]) {
   if (!existsSync(join(packageRoot, path))) {
@@ -155,6 +156,9 @@ writeFileSync(
     const task = {
       id: 'canary-task', description: 'Canary task', prompt: 'Verify Workshop UI.',
       contextQueries: [], memorySlugs: [], claimed: false,
+      installationId: 'canary:installation', ownerPrincipalId: 'canary:verifier',
+      workspaceId: 'canary:workspace', visibility: { version: 1, clauses: [] },
+      authorizationRevision: 1,
       createdAt: '2026-07-20T00:00:00.000Z', updatedAt: '2026-07-20T00:00:00.000Z',
     };
     export default function Page() {
@@ -174,11 +178,56 @@ writeFileSync(
       const bindings = env as unknown as Bindings;
       const runtime = createWorkshopRuntime({
         db: bindings.DB,
-        executeSparql: async () => ({ type: 'boolean', data: true, truncated: false }),
-        knowledge: { call: async () => ({}), health: async () => true },
-        resolvePrincipal: async (candidate) => candidate.headers.get('authorization') ===
-          \`Bearer \${bindings.WORKSHOP_TOKEN ?? 'canary'}\` ? {
-            id: 'canary', capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write', 'admin'],
+        authorization: {
+          async getInstallationAuthorizationState() {
+            return { installationId: 'canary:installation', authorizationRevision: 1, searchGeneration: 1 };
+          },
+          async commitTaskMutation<T>(_db, _context, mutation) {
+            return mutation.first<T>();
+          },
+          async commitMemoryMutation<T>(_db, _context, mutation) {
+            return mutation.first<T>();
+          },
+          async commitTaskBackfill(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
+          },
+          async commitMemoryBackfill(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
+          },
+          async commitCursorSnapshot(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
+          },
+        },
+        knowledge: {
+          authorizedReader: () => ({
+            getEntity: async () => null,
+            searchEntities: async () => ({ items: [], cursor: null }),
+          }),
+          health: async () => true,
+        },
+        diamondHealth: async () => true,
+        cursorCodec: {
+          currentGeneration: async () => 'consumer-generation',
+          digest: async (purpose, value) => {
+            const key = await crypto.subtle.importKey(
+              'raw', new TextEncoder().encode(bindings.WORKSHOP_TOKEN ?? 'canary'),
+              { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+            );
+            const signature = await crypto.subtle.sign('HMAC', key, new Uint8Array([
+              ...new TextEncoder().encode(purpose), 0, ...value,
+            ]));
+            return Array.from(new Uint8Array(signature), (byte) =>
+              byte.toString(16).padStart(2, '0')).join('');
+          },
+          seal: async () => { throw new Error('pagination not exercised'); },
+          open: async () => { throw new Error('pagination not exercised'); },
+        },
+          resolvePrincipal: async (candidate) => candidate.headers.get('authorization') ===
+            \`Bearer \${bindings.WORKSHOP_TOKEN ?? 'canary'}\` ? {
+            installationId: 'canary:installation', principalId: 'canary:verifier',
+            activeWorkspaceId: 'canary:workspace', workspaceIds: ['canary:workspace'],
+            capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write', 'admin'],
+            authorizationRevision: 1,
           } : null,
       });
       return createWorkshopMcpHandler(runtime)(request);

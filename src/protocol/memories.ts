@@ -1,4 +1,5 @@
 import type { Page } from './tasks.js';
+import type { VisibilityScopeV1 } from './authorization.js';
 
 export interface Memory {
   slug: string;
@@ -7,6 +8,11 @@ export interface Memory {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  installationId: string;
+  ownerPrincipalId: string;
+  workspaceId: string;
+  visibility: VisibilityScopeV1;
+  authorizationRevision: number;
 }
 
 export interface UpsertMemoryInput {
@@ -14,6 +20,7 @@ export interface UpsertMemoryInput {
   content: string;
   expectedUpdatedAt?: string;
   expectedRevision?: number;
+  visibility?: VisibilityScopeV1;
 }
 
 export interface MemoryFilters {

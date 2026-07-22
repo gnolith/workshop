@@ -105,6 +105,27 @@ describe('Web route factories', () => {
         )
       ).status,
     ).toBe(200);
+    expect(
+      (
+        await probe(
+          request('https://site.test/api/workshop/probe', 'POST', 'admin'),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await probe(
+          request('https://site.test/api/workshop/probe', 'POST', 'writer'),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await probe(
+          request('https://site.test/api/workshop/probe', 'POST', 'full'),
+        )
+      ).status,
+    ).toBe(200);
     const health = createWorkshopHealthHandler(value);
     const response = await health(
       request('https://site.test/api/workshop/health'),

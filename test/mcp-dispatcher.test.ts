@@ -3,8 +3,9 @@ import {
   createWorkshopToolDispatcher,
   type WorkshopToolDispatchContext,
 } from '../src/mcp.js';
+import { WorkshopError } from '../src/protocol/errors.js';
 import type { WorkshopPrincipal } from '../src/protocol.js';
-import { createTestContext } from './helpers.js';
+import { createTestContext, TEST_AUTHORIZATION } from './helpers.js';
 
 const disposals: Array<() => Promise<void>> = [];
 afterEach(async () =>
@@ -12,16 +13,33 @@ afterEach(async () =>
 );
 
 const reader: WorkshopPrincipal = {
-  id: 'agent:reader',
+  ...TEST_AUTHORIZATION,
+  principalId: 'agent:reader',
   capabilities: ['read'],
 };
 const writer: WorkshopPrincipal = {
-  id: 'agent:writer',
+  ...TEST_AUTHORIZATION,
+  principalId: 'agent:writer',
   capabilities: ['read', 'task-write', 'knowledge-write', 'memory-write'],
 };
 const admin: WorkshopPrincipal = {
-  id: 'agent:admin',
+  ...TEST_AUTHORIZATION,
+  principalId: 'agent:admin',
   capabilities: ['admin'],
+};
+const fullyAuthorizedAdmin: WorkshopPrincipal = {
+  ...admin,
+  capabilities: [
+    'read',
+    'task-write',
+    'knowledge-write',
+    'memory-write',
+    'admin',
+  ],
+};
+const readableAdmin: WorkshopPrincipal = {
+  ...admin,
+  capabilities: ['read', 'admin'],
 };
 
 function dispatchContext(
@@ -42,8 +60,17 @@ async function setup() {
 describe('transport-neutral Workshop tool dispatcher', () => {
   it('has a complete deterministic registry and filters it by capability', async () => {
     const { dispatcher } = await setup();
-    expect(dispatcher.tools).toHaveLength(34);
-    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(34);
+    expect(dispatcher.tools).toHaveLength(15);
+    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(15);
+    expect(dispatcher.tools.map(({ name }) => name)).not.toEqual(
+      expect.arrayContaining([
+        'validate_sparql',
+        'dry_run_sparql',
+        'query_sparql',
+        'create_item',
+        'add_reference',
+      ]),
+    );
 
     const anonymous = dispatcher.listTools(null);
     expect(anonymous).toMatchObject({
@@ -60,9 +87,24 @@ describe('transport-neutral Workshop tool dispatcher', () => {
     }
 
     const administrative = dispatcher.listTools(admin);
-    expect(administrative.ok).toBe(true);
-    if (administrative.ok) {
-      expect(administrative.value).toHaveLength(34);
+    expect(administrative).toMatchObject({
+      ok: false,
+      failure: { kind: 'forbidden', error: { code: 'forbidden' } },
+    });
+
+    const fullyAuthorized = dispatcher.listTools(fullyAuthorizedAdmin);
+    expect(fullyAuthorized.ok).toBe(true);
+    if (fullyAuthorized.ok) {
+      expect(fullyAuthorized.value).toHaveLength(15);
+    }
+
+    const readableAdministrative = dispatcher.listTools(readableAdmin);
+    expect(readableAdministrative.ok).toBe(true);
+    if (readableAdministrative.ok) {
+      const names = readableAdministrative.value.map(({ name }) => name);
+      expect(names).toContain('list_tasks');
+      expect(names).not.toContain('create_task');
+      expect(names).not.toContain('upsert_memory');
     }
   });
 
@@ -125,5 +167,42 @@ describe('transport-neutral Workshop tool dispatcher', () => {
       ok: true,
       value: { id: expect.any(String), description: 'Process-local task' },
     });
+  });
+
+  it('normalizes service-time authorization revocation as authorization failure', async () => {
+    const fixture = await createTestContext();
+    disposals.push(fixture.dispose);
+    const observations: Array<Record<string, unknown>> = [];
+    const tasks = {
+      async create() {
+        throw new WorkshopError('forbidden', 'Authorization denied');
+      },
+    } as unknown as typeof fixture.runtime.tasks;
+    const dispatcher = createWorkshopToolDispatcher({
+      ...fixture.runtime,
+      tasks,
+      observe: async (event) => {
+        observations.push(event as unknown as Record<string, unknown>);
+      },
+    });
+    const result = await dispatcher.callTool(
+      {
+        name: 'create_task',
+        arguments: { description: 'Revoked', prompt: 'Must not run' },
+      },
+      dispatchContext(writer),
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { kind: 'forbidden', error: { code: 'forbidden' } },
+    });
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: 'authorization.failure',
+          errorCode: 'forbidden',
+        }),
+      ]),
+    );
   });
 });

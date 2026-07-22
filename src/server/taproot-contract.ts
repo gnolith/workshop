@@ -1,3 +1,5 @@
+import type { VisibilityScopeV1 } from '../protocol/authorization.js';
+
 export type TaprootEntityId = `Q${number}` | `P${number}`;
 export type TaprootPropertyId = `P${number}`;
 export type TaprootReferencedEntityId =
@@ -121,8 +123,18 @@ export interface TaprootEditMetadata {
   requestId?: string;
 }
 
+export interface TaprootCanonicalAuthorizationPolicyInput {
+  installationId: string;
+  workspaceId: string | null;
+  ownerPrincipalId: string;
+  visibility: VisibilityScopeV1;
+  statementRestrictions: Readonly<Record<string, readonly VisibilityScopeV1[]>>;
+  expectedAuthorizationRevision: number;
+}
+
 export interface TaprootExpectedRevision extends TaprootEditMetadata {
   expectedRevision: number;
+  authorization: TaprootCanonicalAuthorizationPolicyInput;
 }
 
 export interface TaprootStatement {
@@ -138,6 +150,7 @@ export interface TaprootStatement {
 }
 
 export interface TaprootCreateItemInput extends TaprootEditMetadata {
+  authorization: TaprootCanonicalAuthorizationPolicyInput;
   id?: `Q${number}`;
   labels?: TaprootLanguageMap;
   descriptions?: TaprootLanguageMap;
@@ -147,6 +160,7 @@ export interface TaprootCreateItemInput extends TaprootEditMetadata {
 }
 
 export interface TaprootCreatePropertyInput extends TaprootEditMetadata {
+  authorization: TaprootCanonicalAuthorizationPolicyInput;
   id?: `P${number}`;
   datatype: TaprootEntityDatatype;
   labels?: TaprootLanguageMap;
@@ -155,29 +169,27 @@ export interface TaprootCreatePropertyInput extends TaprootEditMetadata {
   claims?: Record<TaprootPropertyId, TaprootStatement[]>;
 }
 
-export type TaprootAsyncMethod<Args extends unknown[]> = (
-  ...args: Args
-) => Promise<unknown>;
+export interface TaprootMutationReceipt {
+  entityId: TaprootEntityId;
+  previousRevision: number | null;
+  newRevision: number;
+  status: 'committed';
+  authorizationRevision: number;
+  searchGeneration: number;
+}
+
+export type TaprootAsyncMethod<
+  Args extends unknown[],
+  Result = TaprootMutationReceipt,
+> = (...args: Args) => Promise<Result>;
 
 /**
  * The exact Taproot surface Workshop consumes. Function properties are
  * intentional: strictFunctionTypes makes the packed-peer conformance test catch
  * argument additions, removals, and reordering.
  */
-export interface TaprootRepositoryLike {
-  searchEntitiesPage: TaprootAsyncMethod<
-    [
-      query: string,
-      search?: {
-        language?: string;
-        limit?: number;
-        includeDeleted?: boolean;
-        cursor?: string;
-      },
-    ]
-  >;
-  getEntity: TaprootAsyncMethod<[id: TaprootEntityId]>;
-  createItem: TaprootAsyncMethod<[input?: TaprootCreateItemInput]>;
+export interface TaprootKnowledgeWriter {
+  createItem: TaprootAsyncMethod<[input: TaprootCreateItemInput]>;
   createProperty: TaprootAsyncMethod<[input: TaprootCreatePropertyInput]>;
   setLabel: TaprootAsyncMethod<
     [
@@ -285,5 +297,21 @@ export interface TaprootRepositoryLike {
       text: string,
       edit: TaprootExpectedRevision,
     ]
+  >;
+}
+
+export interface TaprootAuthorizedReaderLike {
+  getEntity: TaprootAsyncMethod<[id: TaprootEntityId], unknown>;
+  searchEntities: TaprootAsyncMethod<
+    [
+      query: string,
+      search?: {
+        language?: string;
+        limit?: number;
+        includeDeleted?: boolean;
+        cursor?: string;
+      },
+    ],
+    unknown
   >;
 }

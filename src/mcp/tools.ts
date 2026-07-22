@@ -90,7 +90,7 @@ const taskInputProperties = {
       properties: {
         label: string('Optional result label.'),
         sparql: string(
-          'Read-only SPARQL query, validated and dry-run before save.',
+          'Read-only SPARQL query parsed and policy-validated before save.',
         ),
       },
       required: ['sparql'],
@@ -122,7 +122,7 @@ const taskTools = [
   tool(
     'get_task_packet',
     'Get task packet',
-    'Compile an ephemeral packet from the current task, current SPARQL results, and current memories. This never claims the task.',
+    'Compile an ephemeral packet from the current task and current memories. Stored graph queries remain fail-closed until a scoped graph reader exists. This never claims the task.',
     'read',
     { id: string('Task ID.') },
     ['id'],
@@ -130,7 +130,7 @@ const taskTools = [
   tool(
     'create_task',
     'Create task',
-    'Validate all fields, dry-run every read-only context query, verify every memory, and atomically create a durable task.',
+    'Validate all fields, statically validate every read-only context query, verify every memory, and atomically create a durable task.',
     'task-write',
     taskInputProperties,
     ['description', 'prompt'],
@@ -213,33 +213,6 @@ const memoryTools = [
       expectedUpdatedAt: string('Optional optimistic concurrency timestamp.'),
     },
     ['slug', 'description', 'content'],
-  ),
-];
-
-const sparqlTools = [
-  tool(
-    'validate_sparql',
-    'Validate SPARQL',
-    'Parse a SPARQL query and enforce Workshop read-only and federated SERVICE policy.',
-    'read',
-    { sparql: string('SPARQL query.') },
-    ['sparql'],
-  ),
-  tool(
-    'dry_run_sparql',
-    'Dry-run SPARQL',
-    'Execute a validated read-only query with a very small bounded result to prove it can run.',
-    'read',
-    { sparql: string('SPARQL query.') },
-    ['sparql'],
-  ),
-  tool(
-    'query_sparql',
-    'Query SPARQL',
-    'Execute a validated read-only query under configured timeout and result limits.',
-    'read',
-    { sparql: string('SPARQL query.') },
-    ['sparql'],
   ),
 ];
 
@@ -484,7 +457,9 @@ const required: Record<string, string[]> = {
   export_entity_json: ['entityId'],
 };
 
-const knowledgeTools = KNOWLEDGE_TOOL_NAMES.map((name) =>
+const knowledgeTools = KNOWLEDGE_TOOL_NAMES.filter((name) =>
+  knowledgeReadTools.has(name),
+).map((name) =>
   tool(
     name,
     name
@@ -501,6 +476,5 @@ const knowledgeTools = KNOWLEDGE_TOOL_NAMES.map((name) =>
 export const workshopTools: readonly WorkshopToolDefinition[] = [
   ...taskTools,
   ...memoryTools,
-  ...sparqlTools,
   ...knowledgeTools,
 ] as const;

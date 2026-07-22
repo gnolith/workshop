@@ -1,17 +1,24 @@
-import type { KnowledgeService } from '../protocol/knowledge.js';
 import type { ResolveWorkshopPrincipal } from '../protocol.js';
 import type { D1DatabaseLike, WorkshopPersistence } from './database.js';
+import type { WorkshopCursorCodec } from './cursor.js';
 import type { WorkshopLimits } from './limits.js';
 import { MemoryService } from './memories.js';
 import type { ObserveWorkshop } from './observability.js';
 import { PacketService } from './packets.js';
-import { SparqlService, type ExecuteSparql } from './sparql.js';
+import {
+  createTaprootKnowledgeService,
+  type TaprootKnowledgeOptions,
+} from './knowledge.js';
+import { ContextQueryValidator } from './sparql.js';
 import { TaskService } from './tasks.js';
+import type { WorkshopAuthorizationAuthority } from './authorization.js';
 
 export interface WorkshopCoreOptions {
   persistence: WorkshopPersistence;
-  executeSparql: ExecuteSparql;
-  knowledge: KnowledgeService;
+  authorization: WorkshopAuthorizationAuthority;
+  knowledge: Omit<TaprootKnowledgeOptions, 'authorization'>;
+  diamondHealth: () => boolean | Promise<boolean>;
+  cursorCodec: WorkshopCursorCodec;
   limits?: Partial<WorkshopLimits>;
   allowService?: (iri: URL) => boolean | Promise<boolean>;
   observe?: ObserveWorkshop;
@@ -25,8 +32,9 @@ export interface WorkshopCore {
   tasks: TaskService;
   memories: MemoryService;
   packets: PacketService;
-  sparql: SparqlService;
-  knowledge: KnowledgeService;
+  knowledge: ReturnType<typeof createTaprootKnowledgeService>;
+  authorization: WorkshopAuthorizationAuthority;
+  diamondHealth: () => boolean | Promise<boolean>;
   observe?: ObserveWorkshop;
 }
 
@@ -51,25 +59,35 @@ export function createWorkshopCore(options: WorkshopCoreOptions): WorkshopCore {
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.observe ? { observe: options.observe } : {}),
   };
-  const memories = new MemoryService(options.persistence, shared);
-  const sparql = new SparqlService({
-    execute: options.executeSparql,
+  const memories = new MemoryService(options.persistence, {
+    ...shared,
+    authorization: options.authorization,
+    cursorCodec: options.cursorCodec,
+  });
+  const queryValidator = new ContextQueryValidator({
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.allowService ? { allowService: options.allowService } : {}),
     ...(options.observe ? { observe: options.observe } : {}),
   });
-  const tasks = new TaskService(options.persistence, memories, sparql, {
+  const tasks = new TaskService(options.persistence, memories, queryValidator, {
     ...shared,
+    authorization: options.authorization,
+    cursorCodec: options.cursorCodec,
     ...(options.createId ? { createId: options.createId } : {}),
+  });
+  const knowledge = createTaprootKnowledgeService({
+    ...options.knowledge,
+    authorization: options.authorization,
   });
   return {
     persistence: options.persistence,
     ...(options.limits ? { limits: options.limits } : {}),
     tasks,
     memories,
-    packets: new PacketService(tasks, memories, sparql, shared),
-    sparql,
-    knowledge: options.knowledge,
+    packets: new PacketService(tasks, memories, shared),
+    knowledge,
+    authorization: options.authorization,
+    diamondHealth: options.diamondHealth,
     ...(options.observe ? { observe: options.observe } : {}),
   };
 }
@@ -79,8 +97,10 @@ export function createWorkshopRuntime(
 ): WorkshopRuntime {
   const core = createWorkshopCore({
     persistence: options.db,
-    executeSparql: options.executeSparql,
+    authorization: options.authorization,
     knowledge: options.knowledge,
+    diamondHealth: options.diamondHealth,
+    cursorCodec: options.cursorCodec,
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.allowService ? { allowService: options.allowService } : {}),
     ...(options.observe ? { observe: options.observe } : {}),

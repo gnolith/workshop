@@ -5,10 +5,14 @@ import type {
   OnboardingSeedPlan,
   OnboardingSeedResult,
 } from '../protocol/onboarding.js';
-import type { WorkshopOnboardingController } from './configuration.js';
 import { hasUiCapability } from './configuration.js';
 import { WorkshopErrorNotice } from './error-notice.js';
 import { WorkshopOnboarding } from './onboarding.js';
+
+interface WorkshopOnboardingController {
+  preview(input: OnboardingSeedInput): Promise<OnboardingSeedPlan>;
+  apply(plan: OnboardingSeedPlan): Promise<OnboardingSeedResult>;
+}
 
 export function WorkshopOnboardingScreen({
   controller,

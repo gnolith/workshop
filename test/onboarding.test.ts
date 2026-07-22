@@ -10,6 +10,16 @@ import {
   SqlOnboardingCheckpointStore,
   type OnboardingCheckpointStore,
 } from '../src/server/onboarding.js';
+import type { AuthorizationContext } from '../src/protocol.js';
+
+const auth = (principalId = 'owner'): AuthorizationContext => ({
+  installationId: 'installation:test',
+  principalId,
+  activeWorkspaceId: 'workspace:test',
+  workspaceIds: ['workspace:test'],
+  capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write'],
+  authorizationRevision: 1,
+});
 
 const disposals: Array<() => Promise<void>> = [];
 
@@ -64,7 +74,7 @@ describe('resumable onboarding', () => {
         harness.sideEffectFault = { kind, phase: boundary };
       }
 
-      const first = harness.service(faultingStore).apply(plan, 'owner');
+      const first = harness.service(faultingStore).apply(plan, auth());
       if (isCheckpointFault) {
         await expect(first).rejects.toThrow(`interrupted at ${boundary}`);
         harness.advance(10);
@@ -75,7 +85,7 @@ describe('resumable onboarding', () => {
         });
       }
 
-      const completed = await harness.service().resume(plan.key, 'owner');
+      const completed = await harness.service().resume(plan.key, auth());
       expect(completed).toMatchObject({
         state: 'completed',
         completedSteps: 3,
@@ -113,11 +123,11 @@ describe('resumable onboarding', () => {
     const interrupted = harness.service(interruptedStore);
     const plan = interrupted.plan({ key: 'resume-me', topics: ['One'] });
 
-    await expect(interrupted.apply(plan, 'owner')).rejects.toThrow(
+    await expect(interrupted.apply(plan, auth())).rejects.toThrow(
       'simulated process interruption',
     );
     harness.advance(10);
-    const result = await harness.service().resume(plan.key, 'owner');
+    const result = await harness.service().resume(plan.key, auth());
 
     expect(result).toMatchObject({
       state: 'completed',
@@ -138,14 +148,14 @@ describe('resumable onboarding', () => {
       scopeBoundaries: 'Only cited evidence.',
     });
 
-    const partial = await service.apply(plan, 'owner');
+    const partial = await service.apply(plan, auth());
     expect(partial).toMatchObject({
       state: 'retryable',
       retryable: true,
       completedSteps: 2,
       totalSteps: 3,
     });
-    const completed = await service.resume(plan.key, 'owner');
+    const completed = await service.resume(plan.key, auth());
     expect(completed).toMatchObject({
       state: 'completed',
       completedSteps: 3,
@@ -159,7 +169,14 @@ describe('resumable onboarding', () => {
     const harness = await createHarness();
     const service = harness.service();
     const plan = service.plan({ key: 'exclusive', topics: ['One'] });
-    const planJson = JSON.stringify(plan, Object.keys(plan).sort());
+    const planJson = JSON.stringify({
+      authorization: {
+        installationId: auth().installationId,
+        principalId: auth().principalId,
+        workspaceId: auth().activeWorkspaceId,
+      },
+      plan,
+    });
     await harness.store.create(
       plan.key,
       planJson,
@@ -187,7 +204,7 @@ describe('resumable onboarding', () => {
     await expect(
       service.apply(
         service.plan({ key: 'exclusive', topics: ['Two'] }),
-        'owner',
+        auth(),
       ),
     ).rejects.toMatchObject({ code: 'conflict' });
   });
@@ -197,9 +214,9 @@ describe('resumable onboarding', () => {
     const service = harness.service(undefined, () => false);
     const plan = service.plan({ key: 'not-empty', topics: ['One'] });
     await expect(
-      service.apply(plan, 'owner', { expectedEmpty: true }),
+      service.apply(plan, auth(), { expectedEmpty: true }),
     ).rejects.toMatchObject({ code: 'conflict' });
-    expect(await service.get(plan.key)).toBeNull();
+    expect(await service.get(plan.key, auth())).toBeNull();
   });
 
   it('enforces the stored principal for resume, same-plan apply, and reapply', async () => {
@@ -207,20 +224,28 @@ describe('resumable onboarding', () => {
     harness.failTaskOnce = true;
     const service = harness.service();
     const plan = service.plan({ key: 'principal-bound', topics: ['One'] });
-    await service.apply(plan, 'owner');
-    await expect(service.resume(plan.key, 'intruder')).rejects.toMatchObject({
+    await service.apply(plan, auth());
+    await expect(
+      service.resume(plan.key, auth('intruder')),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(service.apply(plan, auth('intruder'))).rejects.toMatchObject({
       code: 'forbidden',
     });
-    await expect(service.apply(plan, 'intruder')).rejects.toMatchObject({
-      code: 'forbidden',
-    });
-    await expect(service.apply(plan, 'owner')).resolves.toMatchObject({
+    const otherWorkspace = {
+      ...auth(),
+      activeWorkspaceId: 'workspace:other',
+      workspaceIds: ['workspace:other'],
+    };
+    await expect(
+      service.resume(plan.key, otherWorkspace),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(service.apply(plan, auth())).resolves.toMatchObject({
       state: 'completed',
     });
-    await expect(service.apply(plan, 'intruder')).rejects.toMatchObject({
+    await expect(service.apply(plan, auth('intruder'))).rejects.toMatchObject({
       code: 'forbidden',
     });
-  });
+  }, 10_000);
 });
 
 async function createHarness() {
@@ -272,7 +297,7 @@ async function createHarness() {
     ) {
       return new OnboardingService(
         {
-          async create(input) {
+          async create(input, authorization) {
             const key = input.idempotencyKey ?? '';
             maybeFailSideEffect(harness, 'task', 'beforeEffect');
             if (harness.failTaskOnce) {
@@ -293,6 +318,21 @@ async function createHarness() {
               revision: 1,
               createdAt: new Date(tick).toISOString(),
               updatedAt: new Date(tick).toISOString(),
+              installationId: authorization.installationId,
+              ownerPrincipalId: authorization.principalId,
+              workspaceId: authorization.activeWorkspaceId!,
+              visibility: {
+                version: 1,
+                clauses: [
+                  [
+                    {
+                      kind: 'workspace',
+                      workspaceId: authorization.activeWorkspaceId!,
+                    },
+                  ],
+                ],
+              },
+              authorizationRevision: authorization.authorizationRevision,
             };
             taskByKey.set(key, value);
             maybeFailSideEffect(harness, 'task', 'afterEffect');
@@ -300,11 +340,11 @@ async function createHarness() {
           },
         },
         {
-          async putIdempotent(slug, input, context) {
+          async putIdempotent(slug, input, authorization, idempotencyKey) {
             maybeFailSideEffect(harness, 'memory', 'beforeEffect');
-            const existing = memoryByKey.get(context.idempotencyKey);
+            const existing = memoryByKey.get(idempotencyKey);
             if (existing) return existing;
-            harness.memoryEffects.push(context.idempotencyKey);
+            harness.memoryEffects.push(idempotencyKey);
             const value: Memory = {
               slug,
               description: input.description,
@@ -312,8 +352,23 @@ async function createHarness() {
               revision: 1,
               createdAt: new Date(tick).toISOString(),
               updatedAt: new Date(tick).toISOString(),
+              installationId: authorization.installationId,
+              ownerPrincipalId: authorization.principalId,
+              workspaceId: authorization.activeWorkspaceId!,
+              visibility: {
+                version: 1,
+                clauses: [
+                  [
+                    {
+                      kind: 'workspace',
+                      workspaceId: authorization.activeWorkspaceId!,
+                    },
+                  ],
+                ],
+              },
+              authorizationRevision: authorization.authorizationRevision,
             };
-            memoryByKey.set(context.idempotencyKey, value);
+            memoryByKey.set(idempotencyKey, value);
             maybeFailSideEffect(harness, 'memory', 'afterEffect');
             return value;
           },
@@ -332,6 +387,15 @@ async function createHarness() {
         },
         {
           store: selectedStore,
+          authorization: {
+            async getInstallationAuthorizationState() {
+              return {
+                installationId: auth().installationId,
+                authorizationRevision: 1,
+                searchGeneration: 1,
+              };
+            },
+          },
           isEmpty,
           clock: () => new Date(++tick),
           createLeaseToken: () => `lease-${tick}`,

@@ -15,6 +15,13 @@ import type {
   StoredOnboardingStep,
 } from './onboarding-store.js';
 import { requiredText } from './validation.js';
+import {
+  denied,
+  requireActiveWorkspace,
+  requireCurrentAuthorization,
+  type AuthorizationContext,
+  type WorkshopAuthorizationSource,
+} from './authorization.js';
 
 export type {
   OnboardingSeedInput,
@@ -28,7 +35,10 @@ export {
 
 /** Task creation must honor CreateTaskInput.idempotencyKey. */
 export interface OnboardingTaskWriter {
-  create(input: CreateTaskInput, principalId?: string): Promise<Task>;
+  create(
+    input: CreateTaskInput,
+    authorization: AuthorizationContext,
+  ): Promise<Task>;
 }
 
 /**
@@ -39,7 +49,8 @@ export interface OnboardingMemoryWriter {
   putIdempotent(
     slug: string,
     input: UpsertMemoryInput,
-    context: { principalId: string; idempotencyKey: string },
+    authorization: AuthorizationContext,
+    idempotencyKey: string,
   ): Promise<Memory>;
 }
 
@@ -52,12 +63,13 @@ export interface OnboardingMemoryWriter {
 export interface OnboardingEntityWriter {
   createItem(
     input: Readonly<Record<string, unknown>>,
-    context: { principalId: string; idempotencyKey: string },
+    context: { authorization: AuthorizationContext; idempotencyKey: string },
   ): Promise<unknown>;
 }
 
 export interface OnboardingServiceOptions {
   store: OnboardingCheckpointStore;
+  authorization: WorkshopAuthorizationSource;
   /** Optional Site-specific check supporting an expected-empty seed precondition. */
   isEmpty?: (key: string) => boolean | Promise<boolean>;
   clock?: () => Date;
@@ -186,15 +198,24 @@ export class OnboardingService {
     return { key, defaultLanguage, entities, memories, tasks };
   }
 
-  async get(key: string): Promise<OnboardingSeedResult | null> {
+  async get(
+    key: string,
+    authorization: AuthorizationContext,
+  ): Promise<OnboardingSeedResult | null> {
+    const context = await requireCurrentAuthorization(
+      this.options.authorization,
+      authorization,
+    );
     const normalized = requiredText(key, 'key', 256);
     const run = await this.options.store.get(normalized);
-    return run ? toResult(run) : null;
+    if (!run) return null;
+    assertRunAuthorization(run, context);
+    return toResult(run);
   }
 
   async resume(
     key: string,
-    principalId: string,
+    authorization: AuthorizationContext,
   ): Promise<OnboardingSeedResult> {
     const normalized = requiredText(key, 'key', 256);
     const run = await this.options.store.get(normalized);
@@ -204,16 +225,25 @@ export class OnboardingService {
         `Onboarding seed ${normalized} was not found`,
       );
     }
-    return this.#run(run, requiredText(principalId, 'principalId', 256));
+    const context = await requireCurrentAuthorization(
+      this.options.authorization,
+      authorization,
+    );
+    assertRunAuthorization(run, context);
+    return this.#run(run, context);
   }
 
   async apply(
     plan: OnboardingSeedPlan,
-    principalId: string,
+    authorization: AuthorizationContext,
     options: ApplyOnboardingOptions = {},
   ): Promise<OnboardingSeedResult> {
-    const principal = requiredText(principalId, 'principalId', 256);
-    const planJson = stableJson(plan);
+    const context = await requireCurrentAuthorization(
+      this.options.authorization,
+      authorization,
+    );
+    const principal = context.principalId;
+    const planJson = scopedPlanJson(plan, context);
     let run = await this.options.store.get(plan.key);
     if (!run) {
       if (options.expectedEmpty) {
@@ -238,6 +268,7 @@ export class OnboardingService {
         this.#clock().toISOString(),
       );
     }
+    assertRunAuthorization(run, context);
     if (run.planJson !== planJson) {
       throw new WorkshopError(
         'conflict',
@@ -246,19 +277,14 @@ export class OnboardingService {
         { state: 'operator_action_required' },
       );
     }
-    return this.#run(run, principal);
+    return this.#run(run, context);
   }
 
   async #run(
     initial: StoredOnboardingRun,
-    principalId: string,
+    authorization: AuthorizationContext,
   ): Promise<OnboardingSeedResult> {
-    if (initial.principalId !== principalId) {
-      throw new WorkshopError(
-        'forbidden',
-        `Onboarding seed ${initial.key} belongs to a different principal`,
-      );
-    }
+    assertRunAuthorization(initial, authorization);
     if (
       initial.state === 'completed' ||
       initial.state === 'operator_action_required'
@@ -296,7 +322,7 @@ export class OnboardingService {
       if (!checkpointed) throw lostLease(run.key);
       let receipt: unknown;
       try {
-        receipt = await this.#execute(step, principalId);
+        receipt = await this.#execute(step, authorization);
       } catch (error) {
         const failure = this.#classify(error, step);
         const state = failure.retryable
@@ -331,22 +357,27 @@ export class OnboardingService {
     return toResult(await this.#requireRun(run.key));
   }
 
-  #execute(step: StoredOnboardingStep, principalId: string): Promise<unknown> {
+  #execute(
+    step: StoredOnboardingStep,
+    authorization: AuthorizationContext,
+  ): Promise<unknown> {
     switch (step.kind) {
       case 'entity':
         return this.entities.createItem(
           step.input as Readonly<Record<string, unknown>>,
-          { principalId, idempotencyKey: step.key },
+          { authorization, idempotencyKey: step.key },
         );
       case 'memory': {
         const input = step.input as MemoryStepInput;
-        return this.memories.putIdempotent(input.slug, input.input, {
-          principalId,
-          idempotencyKey: step.key,
-        });
+        return this.memories.putIdempotent(
+          input.slug,
+          input.input,
+          authorization,
+          step.key,
+        );
       }
       case 'task':
-        return this.tasks.create(step.input as CreateTaskInput, principalId);
+        return this.tasks.create(step.input as CreateTaskInput, authorization);
     }
   }
 
@@ -382,6 +413,43 @@ export class OnboardingService {
       );
     }
     return run;
+  }
+}
+
+function scopedPlanJson(
+  plan: OnboardingSeedPlan,
+  authorization: AuthorizationContext,
+): string {
+  return stableJson({
+    authorization: {
+      installationId: authorization.installationId,
+      principalId: authorization.principalId,
+      workspaceId: requireActiveWorkspace(authorization),
+    },
+    plan,
+  });
+}
+
+function assertRunAuthorization(
+  run: StoredOnboardingRun,
+  authorization: AuthorizationContext,
+): void {
+  if (run.principalId !== authorization.principalId) throw denied();
+  try {
+    const envelope = JSON.parse(run.planJson) as {
+      authorization?: Record<string, unknown>;
+    };
+    const scope = envelope.authorization;
+    if (
+      !scope ||
+      scope.installationId !== authorization.installationId ||
+      scope.principalId !== authorization.principalId ||
+      scope.workspaceId !== requireActiveWorkspace(authorization)
+    )
+      throw denied();
+  } catch (error) {
+    if (error instanceof WorkshopError) throw error;
+    throw denied();
   }
 }
 

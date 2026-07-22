@@ -1,7 +1,7 @@
 # Workshop
 
 `@gnolith/workshop` is Gnolith's agent-facing operating layer: durable research
-tasks, ephemeral task packets, reusable memories, bounded SPARQL access,
+tasks, ephemeral task packets, reusable memories, authorization-aware graph access,
 Taproot-backed knowledge tools, Streamable HTTP MCP, Worker route factories,
 and the Workshop Waystone UI.
 
@@ -11,33 +11,36 @@ packet snapshots, or a background coordinator.
 
 ## Runtime surfaces
 
-| Import                         | Runtime        | Purpose                                                 |
-| ------------------------------ | -------------- | ------------------------------------------------------- |
-| `@gnolith/workshop`            | any            | Package identity and safe shared types                  |
-| `@gnolith/workshop/core`       | any            | Process-local services and authorized tool dispatch     |
-| `@gnolith/workshop/protocol`   | browser/Worker | Models, errors, and injectable HTTP client              |
-| `@gnolith/workshop/server`     | Worker/process | Persistence services, health, onboarding, HTTP adapters |
-| `@gnolith/workshop/mcp`        | any/Worker     | Neutral tool dispatcher and stateless HTTP MCP server   |
-| `@gnolith/workshop/site`       | Worker         | Thin App Router-compatible route factories              |
-| `@gnolith/workshop/ui`         | browser        | React 19 components and `workshopPlugin`                |
-| `@gnolith/workshop/migrations` | installer      | Embedded canonical migration manifest                   |
-| `@gnolith/workshop/styles.css` | browser        | Workshop-specific styles                                |
+| Import                         | Runtime        | Purpose                                               |
+| ------------------------------ | -------------- | ----------------------------------------------------- |
+| `@gnolith/workshop`            | any            | Package identity and safe shared types                |
+| `@gnolith/workshop/core`       | any            | Process-local services and authorized tool dispatch   |
+| `@gnolith/workshop/protocol`   | browser/Worker | Models, errors, and injectable HTTP client            |
+| `@gnolith/workshop/server`     | Worker/process | Persistence services, health, and HTTP adapters       |
+| `@gnolith/workshop/mcp`        | any/Worker     | Neutral tool dispatcher and stateless HTTP MCP server |
+| `@gnolith/workshop/site`       | Worker         | Thin App Router-compatible route factories            |
+| `@gnolith/workshop/ui`         | browser        | React 19 components and `workshopPlugin`              |
+| `@gnolith/workshop/migrations` | installer      | Embedded canonical migration manifest                 |
+| `@gnolith/workshop/styles.css` | browser        | Workshop-specific styles                              |
 
 The root export intentionally does not import all runtimes.
 
 ## Process-local integration
 
 Core services run directly in a process without HTTP, a UI, or a listening
-server. The host injects one structural SQLite persistence capability plus its
-SPARQL and knowledge services:
+server. The host injects one structural SQLite persistence capability, the same
+live atomic authorization authority used by Taproot, an opaque cursor codec,
+and read-authorized knowledge/health adapters:
 
 ```ts
 import { createWorkshopCore } from '@gnolith/workshop/core';
 
 const workshop = createWorkshopCore({
   persistence,
-  executeSparql,
-  knowledge,
+  authorization,
+  cursorCodec,
+  knowledge: { authorizedReader, health: taprootHealth },
+  diamondHealth,
 });
 ```
 
@@ -62,21 +65,30 @@ services. Authentication belongs to the Site; role labels on tasks never grant
 permissions.
 
 ```ts
-import { createTaproot } from '@gnolith/taproot';
-import {
-  createTaprootKnowledgeService,
-  createWorkshopRuntime,
-} from '@gnolith/workshop/server';
-
-const taproot = createTaproot(env.DB, { baseIri: 'https://research.example' });
+import { createWorkshopRuntime } from '@gnolith/workshop/server';
 
 export const workshop = createWorkshopRuntime({
   db: env.DB,
-  executeSparql: siteDiamond.query,
-  knowledge: createTaprootKnowledgeService(taproot),
+  authorization: siteAuthorization,
+  cursorCodec: siteCursorCodec,
+  knowledge: {
+    authorizedReader: createAuthorizedReader,
+    health: taprootHealth,
+  },
+  diamondHealth: siteDiamond.health,
   resolvePrincipal: authenticateWorkshopRequest,
 });
 ```
+
+`siteAuthorization` is the single shared live source and mutation authority. Its
+separate Task, Memory, authorization-backfill, and cursor-snapshot methods must
+use Taproot's host-issued guards bound to exact `task-write`, `memory-write`,
+`search:admin`, or `read` capabilities, verify the current authorization and
+search-generation state, and execute the Workshop statements in the same host
+transaction/batch. They must never add or translate capabilities.
+`createAuthorizedReader` must return the public `AuthorizedTaprootReader` bound
+to that same source. Knowledge mutations are unavailable until that shared
+foundation is complete.
 
 Generated App Router files stay thin:
 
@@ -97,17 +109,20 @@ the host chooses to initialize or migrate.
 
 ## Core behavior
 
-- Task creation validates every field, rejects SPARQL writes, dry-runs every
-  context query, and verifies all memory references before inserting anything.
+- Task creation validates every field, statically rejects SPARQL writes and
+  unsafe query forms, and verifies all memory references before inserting.
 - `claim_task` is one conditional SQLite update. Concurrent callers cannot both win.
 - Completion is one conditional update and accepts negative or inconclusive
   nonempty results.
-- Task packets execute current context queries and resolve current memories on
-  every read. Packet reads do not claim or mutate tasks.
-- Knowledge mutations delegate to Taproot and require expected revisions.
+- Task packets resolve authorized current memories on every read. Unscoped
+  context-query execution is disabled until the host supplies a scoped graph
+  boundary. Packet reads do not claim or mutate tasks.
+- Knowledge reads use Taproot's authorized-reader boundary. Mutations are
+  fail-closed and are not advertised by Workshop's MCP surface.
 - MCP authenticates every request and authorizes every tool server-side.
-- Detailed diagnostics and abandoned-claim reset remain administrative server
-  capabilities and are not normal MCP tools.
+- Detailed diagnostics require exact `admin`; abandoned-claim reset requires
+  exact `admin` plus `task-write`. Capabilities never imply one another. These
+  operations are not normal MCP tools.
 
 ## Development
 
@@ -139,10 +154,13 @@ export const workshopUi = createWorkshopPlugin({
       token: () => sessionToken(),
     }),
   capabilities: currentCapabilities,
-  onboarding: onboardingHttpController,
   loadMcpStatus: loadWorkshopMcpStatus,
 });
 ```
+
+Legacy onboarding journals remain quarantined and are not exposed by the
+public core, protocol, MCP, HTTP, or UI surfaces. A separately scoped reusable
+exploration skill will own future onboarding behavior.
 
 `Workshop package handoff ready` means these package-owned gates pass against
 the exact tarball. It does not qualify a complete Gnolith Site. The Codex agent
@@ -157,7 +175,8 @@ and final acceptance.
 - [MCP tools](docs/mcp.md)
 - [Authentication and authorization](docs/authentication.md)
 - [Migrations and upgrades](docs/migrations.md)
-- [Waystone UI and onboarding](docs/ui-and-onboarding.md)
+- [Authorization foundation ledger](docs/authorization-foundation.md)
+- [Waystone UI](docs/ui-and-onboarding.md)
 - [Health and semantic verification](docs/verification.md)
 - [Operational limits](docs/limits.md)
 - [Security and threat assumptions](docs/security.md)

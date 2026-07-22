@@ -3,6 +3,7 @@ export interface WorkshopLimits {
   maxPromptBytes: number;
   maxResultBytes: number;
   maxMemoryBytes: number;
+  maxMemorySlugs: number;
   maxContextQueries: number;
   maxQueryBytes: number;
   sparqlTimeoutMs: number;
@@ -18,6 +19,7 @@ export const defaultWorkshopLimits: Readonly<WorkshopLimits> = {
   maxPromptBytes: 128 * 1024,
   maxResultBytes: 256 * 1024,
   maxMemoryBytes: 128 * 1024,
+  maxMemorySlugs: 100,
   maxContextQueries: 20,
   maxQueryBytes: 16 * 1024,
   sparqlTimeoutMs: 10_000,

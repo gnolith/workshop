@@ -1,8 +1,10 @@
 import { Miniflare } from 'miniflare';
-import type { KnowledgeService } from '../src/protocol/knowledge.js';
 import type { WorkshopPrincipal } from '../src/protocol.js';
+import { WorkshopError } from '../src/protocol/errors.js';
 import { createWorkshopRuntime } from '../src/server/context.js';
 import type { D1DatabaseLike } from '../src/server/database.js';
+import type { WorkshopCursorCodec } from '../src/server/cursor.js';
+import type { WorkshopAuthorizationAuthority } from '../src/server/authorization.js';
 import { workshopMigrations } from '../src/migrations.js';
 
 export async function createTestContext() {
@@ -18,49 +20,138 @@ export async function createTestContext() {
       if (statement.trim()) await db.prepare(statement).run();
     }
   }
+  const authorization: WorkshopAuthorizationAuthority = {
+    async getInstallationAuthorizationState() {
+      return {
+        installationId: TEST_AUTHORIZATION.installationId,
+        authorizationRevision: TEST_AUTHORIZATION.authorizationRevision,
+        searchGeneration: 1,
+      };
+    },
+    async commitTaskMutation<T>(
+      _db: D1DatabaseLike,
+      _context: WorkshopPrincipal,
+      mutation: import('../src/server/database.js').D1PreparedStatementLike,
+    ) {
+      if (!_context.capabilities.includes('task-write'))
+        throw new WorkshopError('forbidden', 'Authorization denied');
+      return mutation.first<T>();
+    },
+    async commitMemoryMutation<T>(
+      _db: D1DatabaseLike,
+      _context: WorkshopPrincipal,
+      mutation: import('../src/server/database.js').D1PreparedStatementLike,
+    ) {
+      if (!_context.capabilities.includes('memory-write'))
+        throw new WorkshopError('forbidden', 'Authorization denied');
+      return mutation.first<T>();
+    },
+    async commitTaskBackfill(_db, _context, _state, mutations) {
+      return _db.batch([...mutations]);
+    },
+    async commitMemoryBackfill(_db, _context, _state, mutations) {
+      return _db.batch([...mutations]);
+    },
+    async commitCursorSnapshot(_db, _context, _state, mutations) {
+      return _db.batch([...mutations]);
+    },
+  };
   let tick = Date.parse('2026-07-20T12:00:00.000Z');
   const knowledgeCalls: Array<{
     name: string;
     input: Record<string, unknown>;
   }> = [];
-  const knowledge: KnowledgeService = {
-    async call(call) {
-      knowledgeCalls.push({ name: call.name, input: { ...call.input } });
-      return {
-        entityId: call.input.entityId ?? 'Q1',
-        previousRevision: null,
-        newRevision: 1,
-        entity: call.input,
-      };
+  const knowledgeReader = {
+    async getEntity(entityId: string) {
+      knowledgeCalls.push({ name: 'get_entity', input: { entityId } });
+      return { entityId, entity: { id: entityId }, revision: 1 };
+    },
+    async searchEntities(query: string, options?: Record<string, unknown>) {
+      knowledgeCalls.push({
+        name: 'search_entities',
+        input: { query, ...(options ?? {}) },
+      });
+      return { items: [], cursor: null };
+    },
+  };
+  const knowledge = {
+    authorizedReader() {
+      return knowledgeReader;
     },
     async health() {
       return true;
     },
   };
+  const cursorCodec = createTestCursorCodec();
   const runtime = createWorkshopRuntime({
     db,
+    authorization,
     knowledge,
+    cursorCodec,
+    diamondHealth: async () => true,
     clock: () => new Date(++tick),
-    executeSparql: async (query, options) =>
-      /ASK/iu.test(query)
-        ? { type: 'boolean', data: true, truncated: false }
-        : {
-            type: 'bindings',
-            data: [{ entity: 'https://example.test/Q1' }].slice(
-              0,
-              options.resultLimit,
-            ),
-            count: 1,
-            truncated: false,
-          },
     resolvePrincipal: async (request) => principalFor(request),
   });
   return {
     miniflare,
     db,
+    authorization,
+    cursorCodec,
     runtime,
     knowledgeCalls,
     dispose: () => miniflare.dispose(),
+  };
+}
+
+export function createTestCursorCodec(): WorkshopCursorCodec & {
+  generation: string;
+} {
+  const values = new Map<string, Uint8Array>();
+  const key = crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode('workshop-test-cursor-hmac-key'),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return {
+    generation: 'test-generation-1',
+    async currentGeneration() {
+      return this.generation;
+    },
+    async digest(purpose, value) {
+      const signature = await crypto.subtle.sign(
+        'HMAC',
+        await key,
+        new Uint8Array([...new TextEncoder().encode(purpose), 0, ...value]),
+      );
+      return Buffer.from(signature).toString('hex');
+    },
+    async seal(generation, plaintext) {
+      const token = `opaque.${generation}.${crypto.randomUUID()}`;
+      values.set(token, plaintext.slice());
+      return token;
+    },
+    async open(generation, token) {
+      const value = values.get(token);
+      if (!value || !token.startsWith(`opaque.${generation}.`))
+        throw new Error('invalid token');
+      return value.slice();
+    },
+  };
+}
+
+export function createTestKnowledgeOptions() {
+  return {
+    authorizedReader: () => ({
+      async getEntity(entityId: string) {
+        return { entityId, entity: { id: entityId }, revision: 1 };
+      },
+      async searchEntities() {
+        return { items: [], cursor: null };
+      },
+    }),
+    health: async () => true,
   };
 }
 
@@ -68,7 +159,15 @@ function principalFor(request: Request): WorkshopPrincipal | null {
   const token = request.headers.get('authorization');
   if (token === 'Bearer admin') {
     return {
-      id: 'agent:admin',
+      ...TEST_AUTHORIZATION,
+      principalId: 'agent:admin',
+      capabilities: ['admin'],
+    };
+  }
+  if (token === 'Bearer full') {
+    return {
+      ...TEST_AUTHORIZATION,
+      principalId: 'agent:full',
       capabilities: [
         'read',
         'task-write',
@@ -80,19 +179,39 @@ function principalFor(request: Request): WorkshopPrincipal | null {
   }
   if (token === 'Bearer writer') {
     return {
-      id: 'agent:writer',
+      ...TEST_AUTHORIZATION,
+      principalId: 'agent:writer',
       capabilities: ['read', 'task-write', 'knowledge-write', 'memory-write'],
     };
   }
   if (token === 'Bearer reader') {
-    return { id: 'agent:reader', capabilities: ['read'] };
+    return {
+      ...TEST_AUTHORIZATION,
+      principalId: 'agent:reader',
+      capabilities: ['read'],
+    };
   }
   return null;
 }
 
+export const TEST_AUTHORIZATION: WorkshopPrincipal = {
+  installationId: 'installation:test',
+  principalId: 'agent:test',
+  activeWorkspaceId: 'workspace:test',
+  workspaceIds: ['workspace:test'],
+  capabilities: [
+    'read',
+    'task-write',
+    'knowledge-write',
+    'memory-write',
+    'admin',
+  ],
+  authorizationRevision: 1,
+};
+
 export function mcpRequest(
   body: unknown,
-  token = 'admin',
+  token = 'full',
   protocol?: string,
 ): Request {
   return new Request('https://site.example/api/workshop/mcp', {

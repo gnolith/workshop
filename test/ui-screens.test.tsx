@@ -8,7 +8,6 @@ import { WorkshopError } from '../src/protocol/errors.js';
 import type {
   Memory,
   UpsertMemoryInput,
-  OnboardingSeedPlan,
   Task,
   WorkshopClient,
 } from '../src/protocol.js';
@@ -16,7 +15,6 @@ import {
   createWorkshopPlugin,
   WorkshopMcpStatusScreen,
   WorkshopMemoriesScreen,
-  WorkshopOnboardingScreen,
   WorkshopTasksScreen,
 } from '../src/ui.js';
 
@@ -31,6 +29,14 @@ const task: Task = {
   revision: 1,
   createdAt: now,
   updatedAt: now,
+  installationId: 'installation:test',
+  ownerPrincipalId: 'agent:test',
+  workspaceId: 'workspace:test',
+  visibility: {
+    version: 1,
+    clauses: [[{ kind: 'workspace', workspaceId: 'workspace:test' }]],
+  },
+  authorizationRevision: 1,
 };
 const memory: Memory = {
   slug: 'citation-policy',
@@ -39,6 +45,14 @@ const memory: Memory = {
   revision: 1,
   createdAt: now,
   updatedAt: now,
+  installationId: 'installation:test',
+  ownerPrincipalId: 'agent:test',
+  workspaceId: 'workspace:test',
+  visibility: {
+    version: 1,
+    clauses: [[{ kind: 'workspace', workspaceId: 'workspace:test' }]],
+  },
+  authorizationRevision: 1,
 };
 
 afterEach(() => cleanup());
@@ -126,52 +140,8 @@ describe('configured Waystone screens', () => {
     );
   });
 
-  it('previews/applies onboarding, displays MCP state, and preserves permissions', async () => {
-    const user = userEvent.setup();
-    const plan: OnboardingSeedPlan = {
-      key: 'initial-research',
-      defaultLanguage: 'en',
-      entities: [{ kind: 'topic', label: 'Archives' }],
-      memories: [],
-      tasks: [],
-    };
-    const preview = vi.fn(async () => plan);
-    const apply = vi.fn(async () => ({
-      key: plan.key,
-      state: 'completed' as const,
-      retryable: false,
-      completedSteps: 1,
-      totalSteps: 1,
-      steps: [
-        {
-          key: `onboarding:${plan.key}:entity:0`,
-          ordinal: 0,
-          kind: 'entity' as const,
-          state: 'completed' as const,
-          attempts: 1,
-        },
-      ],
-      entities: [{}],
-      memories: [],
-      tasks: [],
-    }));
+  it('displays MCP state and preserves permissions', async () => {
     const { rerender } = render(
-      <WorkshopOnboardingScreen
-        controller={{ preview, apply }}
-        capabilities={['read', 'task-write', 'memory-write', 'knowledge-write']}
-      />,
-    );
-    await user.type(screen.getByLabelText('Topics, one per line'), 'Archives');
-    await user.click(screen.getByRole('button', { name: 'Preview seed plan' }));
-    expect(await screen.findByText('Proposed seed plan')).toBeTruthy();
-    await user.click(
-      screen.getByRole('button', { name: 'Apply this seed plan' }),
-    );
-    expect(
-      await screen.findByText(/Seed initial-research applied/u),
-    ).toBeTruthy();
-
-    rerender(
       <WorkshopMcpStatusScreen
         loadStatus={async () => ({
           status: 'connected',
@@ -237,12 +207,11 @@ function mockClient(): WorkshopClient {
       list: vi.fn(async () => ({ items: [memory], cursor: null })),
       get: vi.fn(async () => memory),
       upsert: vi.fn(async (slug: string, input: UpsertMemoryInput) => ({
+        ...memory,
         slug,
         description: input.description,
         content: input.content,
         revision: 1,
-        createdAt: now,
-        updatedAt: now,
       })),
     },
   };

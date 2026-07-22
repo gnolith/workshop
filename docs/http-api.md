@@ -13,7 +13,9 @@
 Handlers accept Web `Request` and return Web `Response`, making them suitable for
 thin host-framework shims. JSON routes are same-origin by default,
 enforce request limits and capabilities, return `{ error: WorkshopErrorBody }`,
-and never expose stacks. Health is safe and public; probe/diagnostics are admin.
+and never expose stacks. Health is safe and public. Probe diagnostics (`GET`)
+require exact `admin`; the mutating semantic probe (`POST`) requires exact
+`admin`, `task-write`, and `memory-write`.
 Task archival is revision-conditional: HTTP clients send the task's exact
 `revision` value in `X-Workshop-Revision` (preferred) or the legacy exact
 `updatedAt` value in `If-Match`. Completed tasks are terminal and cannot later

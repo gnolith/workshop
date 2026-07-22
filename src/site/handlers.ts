@@ -1,7 +1,11 @@
 import { createWorkshopMcpServer } from '../mcp.js';
 import { WorkshopError, normalizeWorkshopError } from '../protocol/errors.js';
 import type { WorkshopPrincipal } from '../protocol.js';
-import { authorize } from '../server/authorization.js';
+import {
+  authorize,
+  requireCapability,
+  requireCurrentAuthorization,
+} from '../server/authorization.js';
 import type { WorkshopRuntime } from '../server/context.js';
 import { HealthService } from '../server/health.js';
 import { resolveLimits } from '../server/limits.js';
@@ -14,14 +18,14 @@ export function createTasksHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     if (request.method === 'GET') {
-      authorize(principal, 'read');
-      return runtime.tasks.list(queryObject(request));
+      const actor = authorize(principal, 'read');
+      return runtime.tasks.list(queryObject(request), actor);
     }
     if (request.method === 'POST') {
       const actor = authorize(principal, 'task-write');
       return runtime.tasks.create(
         (await json(request, runtime)) as never,
-        actor.id,
+        actor,
       );
     }
     throw methodNotAllowed('GET, POST');
@@ -34,27 +38,29 @@ export function createTaskHandler(
   return route(runtime, async (request, principal) => {
     const id = pathValue(request, 'tasks');
     if (request.method === 'GET') {
-      authorize(principal, 'read');
-      return runtime.tasks.get(id);
+      const actor = authorize(principal, 'read');
+      return runtime.tasks.get(id, actor);
     }
     if (request.method === 'PATCH') {
       const actor = authorize(principal, 'task-write');
       return runtime.tasks.update(
         id,
         (await json(request, runtime)) as never,
-        actor.id,
+        actor,
       );
     }
     if (request.method === 'DELETE') {
       const actor = authorize(principal, 'task-write');
       const revision = request.headers.get('x-workshop-revision');
-      return runtime.tasks.archive(id, {
-        ...(revision === null
-          ? { expectedUpdatedAt: requiredHeader(request, 'if-match') }
-          : { expectedRevision: Number(revision) }),
-        principalId: actor.id,
-        administrative: actor.capabilities.includes('admin'),
-      });
+      return runtime.tasks.archive(
+        id,
+        {
+          ...(revision === null
+            ? { expectedUpdatedAt: requiredHeader(request, 'if-match') }
+            : { expectedRevision: Number(revision) }),
+        },
+        actor,
+      );
     }
     throw methodNotAllowed('GET, PATCH, DELETE');
   });
@@ -65,8 +71,12 @@ export function createTaskPacketHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     only(request, 'GET');
-    authorize(principal, 'read');
-    return runtime.packets.get(pathValue(request, 'tasks'), request.signal);
+    const actor = authorize(principal, 'read');
+    return runtime.packets.get(
+      pathValue(request, 'tasks'),
+      actor,
+      request.signal,
+    );
   });
 }
 
@@ -76,7 +86,7 @@ export function createTaskClaimHandler(
   return route(runtime, async (request, principal) => {
     only(request, 'POST');
     const actor = authorize(principal, 'task-write');
-    return runtime.tasks.claim(pathValue(request, 'tasks'), actor.id);
+    return runtime.tasks.claim(pathValue(request, 'tasks'), actor);
   });
 }
 
@@ -90,7 +100,7 @@ export function createTaskCompleteHandler(
     return runtime.tasks.complete(
       pathValue(request, 'tasks'),
       input.result,
-      actor.id,
+      actor,
     );
   });
 }
@@ -100,8 +110,8 @@ export function createMemoriesHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     only(request, 'GET');
-    authorize(principal, 'read');
-    return runtime.memories.list(queryObject(request));
+    const actor = authorize(principal, 'read');
+    return runtime.memories.list(queryObject(request), actor);
   });
 }
 
@@ -111,37 +121,19 @@ export function createMemoryHandler(
   return route(runtime, async (request, principal) => {
     const slug = pathValue(request, 'memories');
     if (request.method === 'GET') {
-      authorize(principal, 'read');
-      return runtime.memories.get(slug);
+      const actor = authorize(principal, 'read');
+      return runtime.memories.get(slug, actor);
     }
     if (request.method === 'PUT') {
       const actor = authorize(principal, 'memory-write');
       return runtime.memories.upsert(
         slug,
         (await json(request, runtime)) as never,
-        actor.id,
+        actor,
       );
     }
     throw methodNotAllowed('GET, PUT');
   });
-}
-
-export function createSparqlValidationHandler(
-  runtime: WorkshopRuntime,
-): WorkshopRouteHandler {
-  return sparqlRoute(runtime, 'validate');
-}
-
-export function createSparqlDryRunHandler(
-  runtime: WorkshopRuntime,
-): WorkshopRouteHandler {
-  return sparqlRoute(runtime, 'dryRun');
-}
-
-export function createSparqlQueryHandler(
-  runtime: WorkshopRuntime,
-): WorkshopRouteHandler {
-  return sparqlRoute(runtime, 'query');
 }
 
 export function createWorkshopMcpHandler(
@@ -174,9 +166,14 @@ export function createWorkshopProbeHandler(
 ): WorkshopRouteHandler {
   const health = healthService(runtime);
   return route(runtime, async (request, principal) => {
-    const actor = authorize(principal, 'admin');
+    const actor = await requireCurrentAuthorization(
+      runtime.authorization,
+      authorize(principal, 'admin'),
+    );
     if (request.method === 'GET') return health.inspect();
     if (request.method !== 'POST') throw methodNotAllowed('GET, POST');
+    requireCapability(actor, 'task-write');
+    requireCapability(actor, 'memory-write');
     const key = crypto.randomUUID();
     const slug = `probe-${key}`;
     const memory = await runtime.memories.upsert(
@@ -185,7 +182,7 @@ export function createWorkshopProbeHandler(
         description: 'Temporary Workshop semantic probe',
         content: 'Probe guidance',
       },
-      actor.id,
+      actor,
     );
     const task = await runtime.tasks.create(
       {
@@ -193,16 +190,15 @@ export function createWorkshopProbeHandler(
         description: 'Temporary Workshop semantic probe',
         prompt: 'Verify the Workshop lifecycle.',
         memorySlugs: [slug],
-        contextQueries: [{ label: 'probe', sparql: 'ASK { }' }],
       },
-      actor.id,
+      actor,
     );
-    const packet = await runtime.packets.get(task.id, request.signal);
-    const claimed = await runtime.tasks.claim(task.id, actor.id);
+    const packet = await runtime.packets.get(task.id, actor, request.signal);
+    const claimed = await runtime.tasks.claim(task.id, actor);
     const completed = await runtime.tasks.complete(
       task.id,
       'Workshop lifecycle probe completed.',
-      actor.id,
+      actor,
     );
     const archiveTask = await runtime.tasks.create(
       {
@@ -210,34 +206,16 @@ export function createWorkshopProbeHandler(
         description: 'Temporary Workshop archive probe',
         prompt: 'Verify the Workshop archive transition.',
       },
-      actor.id,
+      actor,
     );
-    const archived = await runtime.tasks.archive(archiveTask.id, {
-      expectedUpdatedAt: archiveTask.updatedAt,
-      principalId: actor.id,
-      administrative: true,
-    });
+    const archived = await runtime.tasks.archive(
+      archiveTask.id,
+      {
+        expectedUpdatedAt: archiveTask.updatedAt,
+      },
+      actor,
+    );
     return { memory, task, packet, claimed, completed, archiveTask, archived };
-  });
-}
-
-function sparqlRoute(
-  runtime: WorkshopRuntime,
-  operation: 'validate' | 'dryRun' | 'query',
-): WorkshopRouteHandler {
-  return route(runtime, async (request, principal) => {
-    only(request, 'POST');
-    authorize(principal, 'read');
-    const input = await json(request, runtime);
-    if (operation === 'validate') return runtime.sparql.validate(input.sparql);
-    if (operation === 'dryRun') {
-      return runtime.sparql.dryRun(requiredString(input.sparql, 'sparql'), {
-        signal: request.signal,
-      });
-    }
-    return runtime.sparql.query(requiredString(input.sparql, 'sparql'), {
-      signal: request.signal,
-    });
   });
 }
 
@@ -279,7 +257,7 @@ function route(
 function healthService(runtime: WorkshopRuntime): HealthService {
   return new HealthService({
     db: runtime.db,
-    sparql: runtime.sparql,
+    diamondHealth: runtime.diamondHealth,
     knowledge: runtime.knowledge,
     constructMcp: () => createWorkshopMcpServer(runtime),
   });
@@ -333,20 +311,6 @@ async function json(
 
 function queryObject(request: Request): Record<string, string> {
   return Object.fromEntries(new URL(request.url).searchParams);
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    throw new WorkshopError(
-      'validation_failed',
-      `${field} must be a string`,
-      400,
-      {
-        field,
-      },
-    );
-  }
-  return value;
 }
 
 function pathValue(request: Request, segment: string): string {

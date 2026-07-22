@@ -5,7 +5,7 @@ import {
   WORKSHOP_SCHEMA_VERSION,
 } from '../migrations.js';
 import type { D1DatabaseLike } from './database.js';
-import type { SparqlService } from './sparql.js';
+import { inspectWorkshopAuthorizationReadiness } from './authorization-readiness.js';
 
 export interface WorkshopHealth {
   status: 'ok' | 'degraded';
@@ -21,6 +21,7 @@ export interface WorkshopHealth {
     diamond: boolean;
     mcp: boolean;
     compatibility: boolean;
+    authorization: boolean;
   };
 }
 
@@ -30,11 +31,13 @@ export interface WorkshopDiagnostics extends WorkshopHealth {
   missingTables: string[];
   missingIndexes: string[];
   installedPackageVersion: string | null;
+  quarantinedTasks: number | null;
+  quarantinedMemories: number | null;
 }
 
 export interface HealthServiceOptions {
   db: D1DatabaseLike;
-  sparql: SparqlService;
+  diamondHealth: () => boolean | Promise<boolean>;
   knowledge: KnowledgeService;
   constructMcp?: () => unknown;
   compatible?: () => boolean | Promise<boolean>;
@@ -49,26 +52,37 @@ export class HealthService {
     let installedPackageVersion: string | null = null;
     let tables: string[] = [];
     let indexes: string[] = [];
+    let quarantinedTasks: number | null = null;
+    let quarantinedMemories: number | null = null;
     try {
       const objects = await this.options.db
         .prepare(
           "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index') AND name LIKE 'workshop_%' ORDER BY name",
         )
         .all<{ name: string; type: 'table' | 'index' }>();
-      d1 = objects.success;
+      d1 = objects.success !== false;
       tables = (objects.results ?? [])
         .filter((entry) => entry.type === 'table')
         .map((entry) => entry.name);
       indexes = (objects.results ?? [])
         .filter((entry) => entry.type === 'index')
         .map((entry) => entry.name);
-      const version = await this.options.db
+      const versions = await this.options.db
         .prepare(
-          'SELECT version, package_version FROM workshop_schema WHERE singleton = 1',
+          'SELECT singleton, version, package_version FROM workshop_schema ORDER BY singleton',
         )
-        .first<{ version: number; package_version: string }>();
+        .all<{ singleton: number; version: number; package_version: string }>();
+      const version =
+        versions.results?.length === 1 && versions.results[0]?.singleton === 1
+          ? versions.results[0]
+          : undefined;
       schemaVersion = version?.version ?? null;
       installedPackageVersion = version?.package_version ?? null;
+      const authorization = await inspectWorkshopAuthorizationReadiness(
+        this.options.db,
+      );
+      quarantinedTasks = authorization.quarantinedTasks;
+      quarantinedMemories = authorization.quarantinedMemories;
     } catch {
       d1 = false;
     }
@@ -84,12 +98,9 @@ export class HealthService {
       missingIndexes.length === 0;
     const [taproot, diamond, mcp, hostCompatibility] = await Promise.all([
       this.options.knowledge.health?.().catch(() => false) ?? false,
-      this.options.sparql
-        .dryRun('ASK { }', { resultLimit: 1, timeoutMs: 2_000 })
-        .then(
-          () => true,
-          () => false,
-        ),
+      Promise.resolve()
+        .then(() => this.options.diamondHealth())
+        .catch(() => false),
       Promise.resolve()
         .then(() => this.options.constructMcp?.())
         .then(
@@ -100,7 +111,7 @@ export class HealthService {
     ]);
     const compatibility =
       installedPackageVersion !== null &&
-      /^0\.2\./u.test(installedPackageVersion) &&
+      /^0\.3\./u.test(installedPackageVersion) &&
       hostCompatibility;
     const persistence = d1;
     const checks = {
@@ -111,17 +122,20 @@ export class HealthService {
       diamond,
       mcp,
       compatibility,
+      authorization: quarantinedTasks === 0 && quarantinedMemories === 0,
     };
     return {
       status: Object.values(checks).every(Boolean) ? 'ok' : 'degraded',
       schemaVersion,
-      workshopVersion: '0.2.3',
+      workshopVersion: '0.3.0',
       checks,
       tables,
       indexes,
       missingTables: [...missingTables],
       missingIndexes: [...missingIndexes],
       installedPackageVersion,
+      quarantinedTasks,
+      quarantinedMemories,
     };
   }
 

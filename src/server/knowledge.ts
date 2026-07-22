@@ -4,19 +4,24 @@ import type {
   KnowledgeToolCall,
 } from '../protocol/knowledge.js';
 import type { ObserveWorkshop } from './observability.js';
+import {
+  requireCapability,
+  requireCurrentAuthorization,
+  denied,
+  type AuthorizationContext,
+  type WorkshopAuthorizationSource,
+} from './authorization.js';
 import { observed } from './observability.js';
 import type {
-  TaprootCreatePropertyInput,
   TaprootEntityId,
-  TaprootRepositoryLike,
-  TaprootReference,
-  TaprootSitelink,
-  TaprootSnak,
-  TaprootStatement,
+  TaprootAuthorizedReaderLike,
 } from './taproot-contract.js';
 
 export type {
-  TaprootRepositoryLike,
+  TaprootAuthorizedReaderLike,
+  TaprootCanonicalAuthorizationPolicyInput,
+  TaprootKnowledgeWriter,
+  TaprootMutationReceipt,
   TaprootStatement,
 } from './taproot-contract.js';
 
@@ -43,18 +48,51 @@ export const KNOWLEDGE_TOOL_NAMES = [
   'export_entity_json',
 ] as const;
 
+export const KNOWLEDGE_READ_TOOL_NAMES = [
+  'search_entities',
+  'get_entity',
+  'get_entities',
+  'export_entity_json',
+] as const satisfies readonly (typeof KNOWLEDGE_TOOL_NAMES)[number][];
+
+export const KNOWLEDGE_MUTATION_TOOL_NAMES = KNOWLEDGE_TOOL_NAMES.filter(
+  (name) => !(KNOWLEDGE_READ_TOOL_NAMES as readonly string[]).includes(name),
+);
+
 export type KnowledgeToolName = (typeof KNOWLEDGE_TOOL_NAMES)[number];
 
 export interface TaprootKnowledgeOptions {
   observe?: ObserveWorkshop;
+  authorization: WorkshopAuthorizationSource;
+  authorizedReader: (
+    context: AuthorizationContext,
+    source: WorkshopAuthorizationSource,
+  ) => TaprootAuthorizedReaderLike;
+  health: () => boolean | Promise<boolean>;
 }
 
 export function createTaprootKnowledgeService(
-  repository: TaprootRepositoryLike,
-  options: TaprootKnowledgeOptions = {},
+  options: TaprootKnowledgeOptions,
 ): KnowledgeService {
   return {
     async call(call, context) {
+      const rawAuthorization: AuthorizationContext = {
+        installationId: context.installationId,
+        principalId: context.principalId,
+        activeWorkspaceId: context.activeWorkspaceId,
+        workspaceIds: context.workspaceIds,
+        capabilities: context.capabilities,
+        authorizationRevision: context.authorizationRevision,
+      };
+      const authorization = await requireCurrentAuthorization(
+        options.authorization,
+        rawAuthorization,
+      );
+      if (
+        (KNOWLEDGE_MUTATION_TOOL_NAMES as readonly string[]).includes(call.name)
+      )
+        throw denied();
+      requireCapability(authorization, 'read');
       return observed(
         options.observe,
         {
@@ -62,13 +100,16 @@ export function createTaprootKnowledgeService(
           principalId: context.principalId,
           ...(context.requestId ? { requestId: context.requestId } : {}),
         },
-        () => invoke(repository, call, context),
+        () =>
+          invoke(
+            call,
+            options.authorizedReader(authorization, options.authorization),
+          ),
       );
     },
     async health() {
       try {
-        await repository.searchEntitiesPage('', { limit: 1 });
-        return true;
+        return await options.health();
       } catch {
         return false;
       }
@@ -77,31 +118,18 @@ export function createTaprootKnowledgeService(
 }
 
 async function invoke(
-  repository: TaprootRepositoryLike,
   call: KnowledgeToolCall,
-  context: { principalId: string; requestId?: string },
+  authorizedReader: TaprootAuthorizedReaderLike,
 ): Promise<unknown> {
   if (!KNOWLEDGE_TOOL_NAMES.includes(call.name as KnowledgeToolName)) {
     throw new WorkshopError('not_found', `Unknown knowledge tool ${call.name}`);
   }
   const input = call.input;
-  const metadata = {
-    attribution: {
-      id: context.principalId,
-      kind: 'agent' as const,
-      tool: '@gnolith/workshop',
-    },
-    ...(context.requestId ? { requestId: context.requestId } : {}),
-  };
-  const edit = () => ({
-    expectedRevision: integer(input.expectedRevision, 'expectedRevision'),
-    ...metadata,
-  });
   const id = () => entityId(input.entityId, 'entityId');
 
   switch (call.name as KnowledgeToolName) {
     case 'search_entities':
-      return repository.searchEntitiesPage(text(input.query, 'query'), {
+      return authorizedReader.searchEntities(text(input.query, 'query'), {
         ...(typeof input.language === 'string'
           ? { language: input.language }
           : {}),
@@ -109,155 +137,36 @@ async function invoke(
         ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
       });
     case 'get_entity':
-      return repository.getEntity(id());
+      return authorizedReader.getEntity(id());
     case 'get_entities': {
       if (!Array.isArray(input.entityIds) || input.entityIds.length > 100) {
         throw invalid('entityIds must be an array with at most 100 entries');
       }
       return Promise.all(
         input.entityIds.map((entityId) =>
-          repository.getEntity(entityIdValue(entityId, 'entityIds[]')),
+          authorizedReader.getEntity(entityIdValue(entityId, 'entityIds[]')),
         ),
       );
     }
     case 'create_item':
-      validateInitialClaims(input.claims);
-      return repository.createItem({
-        ...input,
-        ...metadata,
-      });
     case 'create_property':
-      return repository.createProperty({
-        ...input,
-        ...metadata,
-      } as unknown as TaprootCreatePropertyInput);
     case 'set_label':
-      return repository.setLabel(
-        id(),
-        text(input.language, 'language'),
-        text(input.value, 'value'),
-        edit(),
-      );
     case 'set_description':
-      return repository.setDescription(
-        id(),
-        text(input.language, 'language'),
-        text(input.value, 'value'),
-        edit(),
-      );
     case 'add_alias':
-      return repository.addAlias(
-        id(),
-        text(input.language, 'language'),
-        text(input.value, 'value'),
-        edit(),
-      );
     case 'remove_alias':
-      return repository.removeAlias(
-        id(),
-        text(input.language, 'language'),
-        integer(input.ordinal, 'ordinal'),
-        edit(),
-      );
     case 'add_sitelink':
-      return repository.setSitelink(
-        itemId(input.entityId, 'entityId'),
-        text(input.site, 'site'),
-        object(input.sitelink, 'sitelink') as unknown as TaprootSitelink,
-        edit(),
-      );
     case 'remove_sitelink':
-      return repository.removeSitelink(
-        itemId(input.entityId, 'entityId'),
-        text(input.site, 'site'),
-        edit(),
-      );
-    case 'add_statement': {
-      const statement = authoredStatement(input.statement, 'statement');
-      return annotateStatements(
-        repository.addStatement(id(), statement, edit()),
-        statementId(statement),
-      );
-    }
-    case 'replace_statement': {
-      const statement = authoredStatement(input.statement, 'statement');
-      return annotateStatements(
-        repository.replaceStatement(
-          id(),
-          text(input.statementId, 'statementId'),
-          statement,
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
-    }
+    case 'add_statement':
+    case 'replace_statement':
     case 'remove_statement':
-      return annotateStatements(
-        repository.removeStatement(
-          id(),
-          text(input.statementId, 'statementId'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
     case 'set_statement_rank':
-      return annotateStatements(
-        repository.setStatementRank(
-          id(),
-          text(input.statementId, 'statementId'),
-          statementRank(input.rank),
-          authoredText(input.text, 'text'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
     case 'add_qualifier':
-      return annotateStatements(
-        repository.addQualifier(
-          id(),
-          text(input.statementId, 'statementId'),
-          object(input.snak, 'snak') as unknown as TaprootSnak,
-          authoredText(input.text, 'text'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
     case 'remove_qualifier':
-      return annotateStatements(
-        repository.removeQualifier(
-          id(),
-          text(input.statementId, 'statementId'),
-          propertyId(input.property, 'property'),
-          integer(input.ordinal, 'ordinal'),
-          authoredText(input.text, 'text'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
     case 'add_reference':
-      return annotateStatements(
-        repository.addReference(
-          id(),
-          text(input.statementId, 'statementId'),
-          object(input.reference, 'reference') as unknown as TaprootReference,
-          authoredText(input.text, 'text'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
     case 'remove_reference':
-      return annotateStatements(
-        repository.removeReference(
-          id(),
-          text(input.statementId, 'statementId'),
-          text(input.hash, 'hash'),
-          authoredText(input.text, 'text'),
-          edit(),
-        ),
-        text(input.statementId, 'statementId'),
-      );
+      throw denied();
     case 'export_entity_json': {
-      const stored = await repository.getEntity(id());
+      const stored = await authorizedReader.getEntity(id());
       return JSON.stringify(
         (stored as { entity?: unknown }).entity ?? stored,
         null,
@@ -265,12 +174,6 @@ async function invoke(
       );
     }
   }
-}
-
-function statementId(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-  const id = (value as Record<string, unknown>).id;
-  return typeof id === 'string' && id.trim() ? id.trim() : undefined;
 }
 
 function entityId(value: unknown, field: string): TaprootEntityId {
@@ -285,98 +188,11 @@ function entityIdValue(value: unknown, field: string): TaprootEntityId {
   return candidate as TaprootEntityId;
 }
 
-function itemId(value: unknown, field: string): `Q${number}` {
-  const candidate = text(value, field);
-  if (!/^Q\d+$/u.test(candidate)) {
-    throw invalid(`${field} must be a Q item ID`, field);
-  }
-  return candidate as `Q${number}`;
-}
-
-function propertyId(value: unknown, field: string): `P${number}` {
-  const candidate = text(value, field);
-  if (!/^P\d+$/u.test(candidate)) {
-    throw invalid(`${field} must be a P property ID`, field);
-  }
-  return candidate as `P${number}`;
-}
-
-function statementRank(value: unknown): 'preferred' | 'normal' | 'deprecated' {
-  if (value !== 'preferred' && value !== 'normal' && value !== 'deprecated') {
-    throw invalid('rank must be preferred, normal, or deprecated', 'rank');
-  }
-  return value;
-}
-
-function authoredStatement(value: unknown, field: string): TaprootStatement {
-  const statement = object(value, field);
-  authoredText(statement.text, `${field}.text`);
-  return statement as unknown as TaprootStatement;
-}
-
-function validateInitialClaims(value: unknown): void {
-  if (value === undefined) return;
-  const claims = object(value, 'claims');
-  for (const [property, statements] of Object.entries(claims)) {
-    if (!Array.isArray(statements)) {
-      throw invalid(
-        `claims.${property} must be an array`,
-        `claims.${property}`,
-      );
-    }
-    statements.forEach((statement, index) =>
-      authoredStatement(statement, `claims.${property}[${index}]`),
-    );
-  }
-}
-
-function authoredText(value: unknown, field: string): string {
-  if (
-    typeof value !== 'string' ||
-    !value.replace(/[\p{White_Space}\p{Cf}]/gu, '')
-  ) {
-    throw invalid(`${field} is required`, field);
-  }
-  return value;
-}
-
-async function annotateStatements(
-  pending: Promise<unknown>,
-  changedStatementId?: string,
-): Promise<unknown> {
-  const result = await pending;
-  if (!changedStatementId) return result;
-  if (!result || typeof result !== 'object' || Array.isArray(result)) {
-    return { result, changedStatementIds: [changedStatementId] };
-  }
-  const record = result as Record<string, unknown>;
-  return {
-    ...record,
-    changedStatementIds: Array.isArray(record.changedStatementIds)
-      ? record.changedStatementIds
-      : [changedStatementId],
-  };
-}
-
 function text(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw invalid(`${field} is required`, field);
   }
   return value.trim();
-}
-
-function integer(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw invalid(`${field} must be a non-negative integer`, field);
-  }
-  return value;
-}
-
-function object(value: unknown, field: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw invalid(`${field} must be an object`, field);
-  }
-  return value as Record<string, unknown>;
 }
 
 function invalid(message: string, field?: string): WorkshopError {

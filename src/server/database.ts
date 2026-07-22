@@ -1,7 +1,7 @@
 export interface D1ResultLike<T = unknown> {
-  success: boolean;
+  success?: boolean;
   meta?: Readonly<Record<string, unknown>>;
-  results?: T[];
+  results: T[];
 }
 
 export interface D1PreparedStatementLike {

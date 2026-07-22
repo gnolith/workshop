@@ -42,10 +42,16 @@ export function memorySlug(value: unknown): string {
   return value;
 }
 
-export function memorySlugs(value: unknown): string[] {
+export function memorySlugs(value: unknown, limits: WorkshopLimits): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
     throw validation('memorySlugs must be an array', { field: 'memorySlugs' });
+  }
+  if (value.length > limits.maxMemorySlugs) {
+    throw new WorkshopError('limit_exceeded', 'Too many linked memories', 413, {
+      field: 'memorySlugs',
+      max: limits.maxMemorySlugs,
+    });
   }
   return [...new Set(value.map(memorySlug))];
 }
