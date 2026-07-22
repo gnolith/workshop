@@ -5,6 +5,8 @@ import type { WorkshopLimits } from './limits.js';
 import { MemoryService } from './memories.js';
 import type { ObserveWorkshop } from './observability.js';
 import { PacketService } from './packets.js';
+import { PromptService } from './prompts.js';
+import type { WorkshopSearchIntegrationV1 } from './search.js';
 import {
   createTaprootKnowledgeService,
   type TaprootKnowledgeOptions,
@@ -24,6 +26,7 @@ export interface WorkshopCoreOptions {
   observe?: ObserveWorkshop;
   clock?: () => Date;
   createId?: () => string;
+  search?: WorkshopSearchIntegrationV1;
 }
 
 export interface WorkshopCore {
@@ -31,11 +34,13 @@ export interface WorkshopCore {
   limits?: Partial<WorkshopLimits>;
   tasks: TaskService;
   memories: MemoryService;
+  prompts?: PromptService;
   packets: PacketService;
   knowledge: ReturnType<typeof createTaprootKnowledgeService>;
   authorization: WorkshopAuthorizationAuthority;
   diamondHealth: () => boolean | Promise<boolean>;
   observe?: ObserveWorkshop;
+  search?: WorkshopSearchIntegrationV1;
 }
 
 export interface WorkshopRuntimeOptions extends Omit<
@@ -63,6 +68,8 @@ export function createWorkshopCore(options: WorkshopCoreOptions): WorkshopCore {
     ...shared,
     authorization: options.authorization,
     cursorCodec: options.cursorCodec,
+    ...(options.search ? { search: options.search.memory } : {}),
+    ...(options.createId ? { createId: options.createId } : {}),
   });
   const queryValidator = new ContextQueryValidator({
     ...(options.limits ? { limits: options.limits } : {}),
@@ -73,22 +80,34 @@ export function createWorkshopCore(options: WorkshopCoreOptions): WorkshopCore {
     ...shared,
     authorization: options.authorization,
     cursorCodec: options.cursorCodec,
+    ...(options.search ? { search: options.search.task } : {}),
     ...(options.createId ? { createId: options.createId } : {}),
   });
   const knowledge = createTaprootKnowledgeService({
     ...options.knowledge,
     authorization: options.authorization,
   });
+  const prompts = options.search
+    ? new PromptService(options.persistence, {
+        ...shared,
+        authorization: options.authorization,
+        cursorCodec: options.cursorCodec,
+        search: options.search.prompt,
+        ...(options.createId ? { createId: options.createId } : {}),
+      })
+    : undefined;
   return {
     persistence: options.persistence,
     ...(options.limits ? { limits: options.limits } : {}),
     tasks,
     memories,
+    ...(prompts ? { prompts } : {}),
     packets: new PacketService(tasks, memories, shared),
     knowledge,
     authorization: options.authorization,
     diamondHealth: options.diamondHealth,
     ...(options.observe ? { observe: options.observe } : {}),
+    ...(options.search ? { search: options.search } : {}),
   };
 }
 
@@ -106,6 +125,7 @@ export function createWorkshopRuntime(
     ...(options.observe ? { observe: options.observe } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.createId ? { createId: options.createId } : {}),
+    ...(options.search ? { search: options.search } : {}),
   });
   return {
     ...core,

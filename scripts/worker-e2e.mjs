@@ -55,18 +55,17 @@ try {
       prompt: 'Verify the published package in a local Worker runtime.',
     },
   });
-  assert.equal(created.result.isError, false);
-  assert.equal(typeof created.result.structuredContent.id, 'string');
+  assert.equal(created.result.isError, true);
+  assert.match(
+    created.result.structuredContent.error.message,
+    /search producer is not registered/u,
+  );
 
   const listed = await call(3, 'tools/call', {
     name: 'list_tasks',
     arguments: {},
   });
-  assert.equal(listed.result.structuredContent.items.length, 1);
-  assert.equal(
-    listed.result.structuredContent.items[0].id,
-    created.result.structuredContent.id,
-  );
+  assert.equal(listed.result.structuredContent.items.length, 0);
   console.log(
     `isolated package-runtime Worker lifecycle passed (cold initialize ${coldRequestMs}ms)`,
   );

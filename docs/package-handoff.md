@@ -15,8 +15,8 @@ registration, deployment configuration, and any browser endpoints used by the
 MCP-status controller. Workshop runtime construction never provisions
 infrastructure or applies migrations.
 
-Workshop CI packs released Taproot 0.3.0 source at
-`9b7eb5de694e6020ce8466e01687b8077fbf915c` and verifies the typed boundary plus
+Workshop CI packs released Taproot 0.4.0 source at
+`819fe054ebb867e1ca92518bfd3b1aa6c5aa277d` and verifies the typed boundary plus
 real native SQLite and persisted D1 runtime behavior. Passing that package gate
 still does not assemble or accept a complete Gnolith Site.
 

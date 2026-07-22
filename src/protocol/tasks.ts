@@ -12,7 +12,12 @@ export type TaskState = 'unclaimed' | 'claimed' | 'completed' | 'archived';
 
 export interface Task {
   id: string;
+  title: string;
+  objective?: string;
   description: string;
+  constraints: readonly string[];
+  acceptanceCriteria: readonly string[];
+  relationships: readonly TaskRelationship[];
   role?: string;
   prompt: string;
   contextQueries: ContextQuery[];
@@ -22,9 +27,14 @@ export interface Task {
   completedAt?: string;
   archivedAt?: string;
   result?: string;
+  outcomeKind?: TaskOutcomeKind;
+  assignedPrincipalId?: string;
+  language: string;
+  attribution: Readonly<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
   revision: number;
+  policyRevision: number;
   installationId: string;
   ownerPrincipalId: string;
   workspaceId: string;
@@ -35,6 +45,14 @@ export interface Task {
 export interface CreateTaskInput {
   idempotencyKey?: string;
   description: string;
+  title?: string;
+  objective?: string;
+  constraints?: readonly string[];
+  acceptanceCriteria?: readonly string[];
+  relationships?: readonly TaskRelationship[];
+  assignedPrincipalId?: string;
+  language?: string;
+  attribution?: Readonly<Record<string, unknown>>;
   role?: string;
   prompt: string;
   contextQueries?: ContextQuery[];
@@ -43,7 +61,15 @@ export interface CreateTaskInput {
 }
 
 export interface UpdateTaskPatch {
+  title?: string;
+  objective?: string | null;
   description?: string;
+  constraints?: readonly string[];
+  acceptanceCriteria?: readonly string[];
+  relationships?: readonly TaskRelationship[];
+  assignedPrincipalId?: string | null;
+  language?: string;
+  attribution?: Readonly<Record<string, unknown>>;
   role?: string | null;
   prompt?: string;
   contextQueries?: ContextQuery[];
@@ -73,6 +99,34 @@ export interface Page<T> {
 }
 
 export type TaskPage = Page<Task>;
+
+export interface TaskRelationship {
+  kind:
+    | 'duplicate'
+    | 'overlaps'
+    | 'reuses'
+    | 'mergeable'
+    | 'splittable'
+    | 'blocks'
+    | 'related';
+  taskId: string;
+}
+
+export type TaskOutcomeKind = 'success' | 'negative' | 'inconclusive';
+
+export interface TaskOutcomeInput {
+  kind: TaskOutcomeKind;
+  result: string;
+}
+
+export interface TaskRevision {
+  taskId: string;
+  revision: number;
+  task: Task;
+  actorPrincipalId: string;
+  eventId: string;
+  createdAt: string;
+}
 
 export interface TaskPacket {
   task: Task;

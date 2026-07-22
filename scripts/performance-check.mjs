@@ -5,9 +5,17 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { gzipSync } from 'node:zlib';
 import { Miniflare } from 'miniflare';
+import {
+  bootstrapTaprootAuthorization,
+  createTaprootHostWriteCapability,
+  initializeTaproot,
+} from '@gnolith/taproot';
 import { createWorkshopMcpServer } from '../dist/mcp.js';
 import { workshopMigrations } from '../dist/migrations.js';
-import { createWorkshopRuntime } from '../dist/server.js';
+import {
+  createWorkshopRuntime,
+  createWorkshopSearchIntegrationV1,
+} from '../dist/server.js';
 
 const miniflare = new Miniflare({
   modules: true,
@@ -24,6 +32,8 @@ const elapsed = async (operation) => {
 
 try {
   const db = await miniflare.getD1Database('DB');
+  const taproot = { baseIri: 'https://performance.workshop.gnolith.test' };
+  await initializeTaproot(db, taproot);
   for (const migration of workshopMigrations) {
     for (const statement of migration.sql.split(/;\s*(?:\r?\n|$)/u)) {
       if (statement.trim()) await db.prepare(statement).run();
@@ -34,9 +44,38 @@ try {
     principalId: 'performance',
     activeWorkspaceId: 'performance:workspace',
     workspaceIds: ['performance:workspace'],
-    capabilities: ['read', 'task-write', 'knowledge-write'],
+    capabilities: [
+      'read',
+      'task-write',
+      'memory-write',
+      'prompt-write',
+      'knowledge-write',
+      'search:admin',
+      'admin',
+    ],
     authorizationRevision: 1,
   };
+  const hostKey = await globalThis.crypto.subtle.generateKey(
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const hostCapability = createTaprootHostWriteCapability(db, taproot, hostKey);
+  await bootstrapTaprootAuthorization(
+    db,
+    taproot,
+    hostCapability,
+    authorizationContext.installationId,
+  );
+  const search = await createWorkshopSearchIntegrationV1({
+    db,
+    taproot,
+    hostCapability,
+    installationId: authorizationContext.installationId,
+    registrationContext: authorizationContext,
+  });
+  for (const domain of [search.task, search.memory, search.prompt])
+    await domain.producer.adoptLegacyPage(authorizationContext, { limit: 100 });
   const runtime = createWorkshopRuntime({
     db,
     authorization: {
@@ -79,6 +118,7 @@ try {
     diamondHealth: async () => true,
     cursorCodec: opaqueCursorCodec(),
     resolvePrincipal: async () => authorizationContext,
+    search,
   });
   for (let index = 0; index < 20; index++) {
     await runtime.tasks.create(

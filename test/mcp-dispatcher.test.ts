@@ -34,7 +34,9 @@ const fullyAuthorizedAdmin: WorkshopPrincipal = {
     'task-write',
     'knowledge-write',
     'memory-write',
+    'prompt-write',
     'admin',
+    'search:admin',
   ],
 };
 const readableAdmin: WorkshopPrincipal = {
@@ -60,8 +62,8 @@ async function setup() {
 describe('transport-neutral Workshop tool dispatcher', () => {
   it('has a complete deterministic registry and filters it by capability', async () => {
     const { dispatcher } = await setup();
-    expect(dispatcher.tools).toHaveLength(15);
-    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(15);
+    expect(dispatcher.tools).toHaveLength(24);
+    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(24);
     expect(dispatcher.tools.map(({ name }) => name)).not.toEqual(
       expect.arrayContaining([
         'validate_sparql',
@@ -95,7 +97,7 @@ describe('transport-neutral Workshop tool dispatcher', () => {
     const fullyAuthorized = dispatcher.listTools(fullyAuthorizedAdmin);
     expect(fullyAuthorized.ok).toBe(true);
     if (fullyAuthorized.ok) {
-      expect(fullyAuthorized.value).toHaveLength(15);
+      expect(fullyAuthorized.value).toHaveLength(24);
     }
 
     const readableAdministrative = dispatcher.listTools(readableAdmin);

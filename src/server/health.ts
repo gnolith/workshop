@@ -111,7 +111,7 @@ export class HealthService {
     ]);
     const compatibility =
       installedPackageVersion !== null &&
-      /^0\.3\./u.test(installedPackageVersion) &&
+      /^0\.4\./u.test(installedPackageVersion) &&
       hostCompatibility;
     const persistence = d1;
     const checks = {
@@ -127,7 +127,7 @@ export class HealthService {
     return {
       status: Object.values(checks).every(Boolean) ? 'ok' : 'degraded',
       schemaVersion,
-      workshopVersion: '0.3.3',
+      workshopVersion: '0.4.0',
       checks,
       tables,
       indexes,

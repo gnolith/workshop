@@ -1,8 +1,8 @@
 /** Runtime-neutral package identity. Runtime APIs use explicit subpaths. */
 export const workshopPackage = {
   name: '@gnolith/workshop',
-  version: '0.3.3',
-  schemaVersion: 5,
+  version: '0.4.0',
+  schemaVersion: 6,
 } as const;
 
 export type { WorkshopCapability, WorkshopPrincipal } from './protocol.js';

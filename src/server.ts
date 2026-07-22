@@ -7,6 +7,8 @@ export * from './server/authorization.js';
 export * from './server/authorization-readiness.js';
 export * from './server/observability.js';
 export * from './server/memories.js';
+export * from './server/prompts.js';
+export * from './server/search.js';
 export * from './server/tasks.js';
 export * from './server/packets.js';
 export * from './server/knowledge.js';

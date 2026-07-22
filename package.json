@@ -1,6 +1,6 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Hosted agent tasks, memories, coordination, and tooling.",
   "type": "module",
   "private": false,
@@ -107,7 +107,7 @@
   },
   "peerDependencies": {
     "@gnolith/diamond": ">=0.4.0 <0.5.0",
-    "@gnolith/taproot": ">=0.3.0 <0.4.0",
+    "@gnolith/taproot": ">=0.4.0 <0.5.0",
     "@gnolith/waystone": ">=0.1.0 <0.2.0",
     "react": ">=19 <20"
   },
@@ -128,6 +128,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@gnolith/diamond": "0.4.0",
+    "@gnolith/taproot": "0.4.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

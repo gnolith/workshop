@@ -17,12 +17,16 @@ import {
 } from '../server/observability.js';
 import type { PacketService } from '../server/packets.js';
 import type { TaskService } from '../server/tasks.js';
+import type { PromptService } from '../server/prompts.js';
+import type { WorkshopSearchIntegrationV1 } from '../server/search.js';
 import { workshopTools, type WorkshopToolDefinition } from './tools.js';
 
 /** The transport-neutral services needed to execute Workshop tools. */
 export interface WorkshopToolRuntime {
   readonly tasks: TaskService;
   readonly memories: MemoryService;
+  readonly prompts?: PromptService;
+  readonly search?: WorkshopSearchIntegrationV1;
   readonly packets: PacketService;
   readonly knowledge: KnowledgeService;
   readonly limits?: Partial<WorkshopLimits>;
@@ -79,6 +83,15 @@ const DIRECT_TOOL_NAMES = [
   'list_memories',
   'get_memory',
   'upsert_memory',
+  'list_prompts',
+  'get_prompt',
+  'create_prompt',
+  'update_prompt',
+  'delete_prompt',
+  'prompt_history',
+  'search',
+  'search_status',
+  'search_admin',
 ] as const;
 
 const KNOWLEDGE_TOOL_NAME_SET: ReadonlySet<string> = new Set(
@@ -244,12 +257,142 @@ async function executeTool(
         principal,
       );
     }
+    case 'list_prompts':
+      return requiredPrompts(runtime).list(input, principal);
+    case 'get_prompt':
+      return requiredPrompts(runtime).get(text(input.id, 'id'), principal);
+    case 'create_prompt':
+      return requiredPrompts(runtime).create(input as never, principal);
+    case 'update_prompt': {
+      const { id, ...update } = input;
+      return requiredPrompts(runtime).update(
+        text(id, 'id'),
+        update as never,
+        principal,
+      );
+    }
+    case 'delete_prompt':
+      return requiredPrompts(runtime).delete(
+        text(input.id, 'id'),
+        positive(input.expectedRevision, 'expectedRevision'),
+        principal,
+      );
+    case 'prompt_history':
+      return requiredPrompts(runtime).history(text(input.id, 'id'), principal);
+    case 'search':
+      return requiredSearch(runtime).search(input as never, principal);
+    case 'search_status': {
+      const search = requiredSearch(runtime);
+      return {
+        materialization: await search.materialization.health(principal),
+        semantic: await search.semantic.status(principal),
+      };
+    }
+    case 'search_admin':
+      return executeSearchAdmin(
+        requiredSearch(runtime),
+        input,
+        principal,
+        signal,
+      );
   }
 
   if (KNOWLEDGE_TOOL_NAME_SET.has(name)) {
     return runtime.knowledge.call({ name, input }, { ...principal, requestId });
   }
   throw new WorkshopError('internal_error', `Tool ${name} has no handler`);
+}
+
+function requiredPrompts(runtime: WorkshopToolRuntime): PromptService {
+  if (!runtime.prompts)
+    throw new WorkshopError(
+      'internal_error',
+      'Prompt producer is not registered',
+    );
+  return runtime.prompts;
+}
+
+function requiredSearch(
+  runtime: WorkshopToolRuntime,
+): WorkshopSearchIntegrationV1 {
+  if (!runtime.search)
+    throw new WorkshopError(
+      'internal_error',
+      'Search integration is not registered',
+    );
+  return runtime.search;
+}
+
+async function executeSearchAdmin(
+  search: WorkshopSearchIntegrationV1,
+  input: Record<string, unknown>,
+  principal: WorkshopPrincipal,
+  signal: AbortSignal,
+): Promise<unknown> {
+  const operation = text(input.operation, 'operation');
+  const id = () => text(input.configurationId, 'configurationId');
+  const plan = () => text(input.planId, 'planId');
+  switch (operation) {
+    case 'materialize':
+      return search.materialization.run(principal, {
+        maxJobs: positive(input.maxJobs ?? 20, 'maxJobs'),
+        maxRebuildRoots: positive(
+          input.maxRebuildRoots ?? 100,
+          'maxRebuildRoots',
+        ),
+      });
+    case 'retry-dead':
+      return search.materialization.retryDead(principal, {
+        limit: positive(input.limit ?? 20, 'limit'),
+      });
+    case 'adopt-legacy': {
+      const kind = text(input.kind, 'kind');
+      if (kind !== 'task' && kind !== 'memory' && kind !== 'prompt')
+        throw new WorkshopError('validation_failed', 'kind is invalid');
+      return search[kind].producer.adoptLegacyPage(principal, {
+        limit: positive(input.limit ?? 100, 'limit'),
+      });
+    }
+    case 'start-rebuild':
+      return search.materialization.startShadowRebuild(principal);
+    case 'activate-rebuild':
+      return search.materialization.activateReadyShadow(principal);
+    case 'semantic-select':
+      return search.semantic.select(id(), principal);
+    case 'semantic-reconnect':
+      return search.semantic.reconnect(id(), principal);
+    case 'semantic-estimate':
+      return search.semantic.estimate(id(), input.policy as never, principal);
+    case 'semantic-approve':
+      return search.semantic.approve(plan(), principal);
+    case 'semantic-run':
+      return search.semantic.run(plan(), principal, signal);
+    case 'semantic-resume':
+      return search.semantic.resume(plan(), principal, signal);
+    case 'semantic-pause':
+      return search.semantic.pause(plan(), principal);
+    case 'semantic-stop':
+      return search.semantic.stop(plan(), principal);
+    case 'semantic-retry':
+      return search.semantic.retry(plan(), principal);
+    case 'semantic-exclude':
+      return search.semantic.exclude(
+        id(),
+        positive(input.generation, 'generation'),
+        text(input.derivedId, 'derivedId'),
+        text(input.reason, 'reason'),
+        principal,
+      );
+    case 'semantic-retire':
+      return search.semantic.retire(id(), principal);
+    case 'semantic-delete-embeddings':
+      return search.semantic.deleteEmbeddings(id(), principal);
+    default:
+      throw new WorkshopError(
+        'validation_failed',
+        'search admin operation is invalid',
+      );
+  }
 }
 
 function authorizeResult(
@@ -333,6 +476,15 @@ function text(value: unknown, field: string): string {
     });
   }
   return value.trim();
+}
+
+function positive(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1)
+    throw new WorkshopError(
+      'validation_failed',
+      `${field} must be a positive integer`,
+    );
+  return Number(value);
 }
 
 async function withTimeout<T>(

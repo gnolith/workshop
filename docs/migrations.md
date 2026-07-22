@@ -1,12 +1,15 @@
 # Migrations and upgrade policy
 
-Workshop owns five exact migrations: `0001_workshop` creates tasks and
+Workshop owns six exact migrations: `0001_workshop` creates tasks and
 memories, `0002_revisions` adds monotonic concurrency tokens, and
 `0003_resumable_onboarding` adds durable run and step checkpoints.
 `0004_authorization` adds installation, owner, workspace, canonical visibility,
 and authorization-revision fields plus candidate-selection indexes.
 `0005_cursor_snapshots` adds durable bounded cursor snapshots, metadata-only
-entries, expiry cleanup support, and cascading entry deletion. Every entry
+entries, expiry cleanup support, and cascading entry deletion.
+`0006_canonical_search_domains` adds canonical Task/Memory metadata and event
+references, immutable revision snapshots, Prompt storage/history, and Prompt
+cursor support. Every entry
 has a monotonic ID and SHA-256 in `workshopMigrations`; the same canonical SQL
 ships under `migrations/`.
 
@@ -23,7 +26,8 @@ Workshop verifies the tables and revision columns required by its recorded
 schema version. Version 4 validation includes the exact authorization table
 constraints and composite Memory key; version 5 validates the exact cursor
 tables, foreign key, and expiry index. Weakened near-miss schemas and schema
-metadata drift are rejected without recording ledger adoption.
+metadata drift are rejected without recording ledger adoption. Version 6 also
+validates Prompt/revision tables and the expanded cursor source-kind contract.
 
 Pre-v4 Task and Memory rows remain deliberately quarantined with null metadata.
 The host may inspect readiness and run an explicit bounded, resumable backfill

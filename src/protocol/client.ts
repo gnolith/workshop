@@ -13,6 +13,17 @@ import type {
   UpdateTaskInput,
 } from './tasks.js';
 import type { Memory } from './memories.js';
+import type { MemoryRevision } from './memories.js';
+import type { TaskRevision } from './tasks.js';
+import type {
+  CreatePromptInput,
+  Prompt,
+  PromptFilters,
+  PromptPage,
+  PromptRevision,
+  UpdatePromptInput,
+} from './prompts.js';
+import type { SearchPage, SearchRequest } from '@gnolith/taproot';
 
 export interface WorkshopClientOptions {
   baseUrl?: string;
@@ -51,6 +62,7 @@ export interface WorkshopClient {
       result: string,
       options?: RequestOptions,
     ): Promise<Task>;
+    history?: (id: string, options?: RequestOptions) => Promise<TaskRevision[]>;
   };
   memories: {
     list(
@@ -63,7 +75,43 @@ export interface WorkshopClient {
       input: UpsertMemoryInput,
       options?: RequestOptions,
     ): Promise<Memory>;
+    delete?: (
+      slug: string,
+      expectedRevision: number,
+      options?: RequestOptions,
+    ) => Promise<void>;
+    history?: (
+      slug: string,
+      options?: RequestOptions,
+    ) => Promise<MemoryRevision[]>;
   };
+  prompts?: {
+    list(
+      filters?: PromptFilters,
+      options?: RequestOptions,
+    ): Promise<PromptPage>;
+    get(id: string, options?: RequestOptions): Promise<Prompt>;
+    create(input: CreatePromptInput, options?: RequestOptions): Promise<Prompt>;
+    update(
+      id: string,
+      input: UpdatePromptInput,
+      options?: RequestOptions,
+    ): Promise<Prompt>;
+    delete(
+      id: string,
+      expectedRevision: number,
+      options?: RequestOptions,
+    ): Promise<void>;
+    history(id: string, options?: RequestOptions): Promise<PromptRevision[]>;
+  };
+  search?: (
+    request: SearchRequest,
+    options?: RequestOptions,
+  ) => Promise<SearchPage>;
+  searchAdmin?: (
+    input?: Readonly<Record<string, unknown>>,
+    options?: RequestOptions,
+  ) => Promise<unknown>;
 }
 
 export function createWorkshopClient(
@@ -173,6 +221,10 @@ export function createWorkshopClient(
           body: JSON.stringify({ result }),
           signal: requestOptions?.signal,
         }),
+      history: (id, requestOptions) =>
+        request(`/api/workshop/tasks/${encodeURIComponent(id)}/history`, {
+          signal: requestOptions?.signal,
+        }),
     },
     memories: {
       list: (filters, requestOptions) =>
@@ -189,6 +241,60 @@ export function createWorkshopClient(
           body: JSON.stringify(input),
           signal: requestOptions?.signal,
         }),
+      delete: (slug, expectedRevision, requestOptions) =>
+        request(`/api/workshop/memories/${encodeURIComponent(slug)}`, {
+          method: 'DELETE',
+          headers: { 'x-workshop-revision': String(expectedRevision) },
+          signal: requestOptions?.signal,
+        }),
+      history: (slug, requestOptions) =>
+        request(`/api/workshop/memories/${encodeURIComponent(slug)}/history`, {
+          signal: requestOptions?.signal,
+        }),
     },
+    prompts: {
+      list: (filters, requestOptions) =>
+        request(`/api/workshop/prompts${query(filters)}`, {
+          signal: requestOptions?.signal,
+        }),
+      get: (id, requestOptions) =>
+        request(`/api/workshop/prompts/${encodeURIComponent(id)}`, {
+          signal: requestOptions?.signal,
+        }),
+      create: (input, requestOptions) =>
+        request('/api/workshop/prompts', {
+          method: 'POST',
+          body: JSON.stringify(input),
+          signal: requestOptions?.signal,
+        }),
+      update: (id, input, requestOptions) =>
+        request(`/api/workshop/prompts/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+          signal: requestOptions?.signal,
+        }),
+      delete: (id, expectedRevision, requestOptions) =>
+        request(`/api/workshop/prompts/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { 'x-workshop-revision': String(expectedRevision) },
+          signal: requestOptions?.signal,
+        }),
+      history: (id, requestOptions) =>
+        request(`/api/workshop/prompts/${encodeURIComponent(id)}/history`, {
+          signal: requestOptions?.signal,
+        }),
+    },
+    search: (searchRequest, requestOptions) =>
+      request('/api/workshop/search', {
+        method: 'POST',
+        body: JSON.stringify(searchRequest),
+        signal: requestOptions?.signal,
+      }),
+    searchAdmin: (input = {}, requestOptions) =>
+      request('/api/workshop/search/admin', {
+        method: Object.keys(input).length ? 'POST' : 'GET',
+        ...(Object.keys(input).length ? { body: JSON.stringify(input) } : {}),
+        signal: requestOptions?.signal,
+      }),
   };
 }

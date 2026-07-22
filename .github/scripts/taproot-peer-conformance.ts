@@ -5,6 +5,9 @@ import {
   addStatement,
   createItem,
   createProperty,
+  createExternalSearchDomainMutationCoordinatorV1,
+  createExternalSearchDomainPolicyAuthorityV1,
+  createExternalSearchProducerGuardV1,
   removeAlias,
   removeQualifier,
   removeReference,
@@ -21,6 +24,7 @@ import {
   type InstallationAuthorizationGuard,
   type InstallationDomainMutationGuard,
   type TaprootWriteOptions,
+  type TaprootHostWriteCapability,
   type VisibilityScopeV1 as TaprootVisibilityScope,
 } from '@gnolith/taproot';
 import type { AuthorizationContext as WorkshopAuthorizationContext } from '@gnolith/workshop/protocol';
@@ -32,7 +36,9 @@ import type {
   D1PreparedStatementLike as WorkshopD1PreparedStatementLike,
   WorkshopAuthorizationAuthority,
   VisibilityScopeV1 as WorkshopVisibilityScope,
+  WorkshopSearchIntegrationV1,
 } from '@gnolith/workshop/server';
+import { createWorkshopSearchIntegrationV1 } from '@gnolith/workshop/server';
 
 declare const db: D1DatabaseLike;
 declare const options: TaprootWriteOptions;
@@ -43,6 +49,8 @@ declare const taskBackfillGuard: InstallationDomainMutationGuard;
 declare const memoryBackfillGuard: InstallationDomainMutationGuard;
 declare const cursorSnapshotGuard: InstallationDomainMutationGuard;
 declare const actualReader: AuthorizedTaprootReader;
+declare const hostCapability: TaprootHostWriteCapability;
+declare const installationId: string;
 declare const taprootAuthorization: TaprootAuthorizationContext;
 declare const workshopAuthorization: WorkshopAuthorizationContext;
 declare const taprootVisibility: TaprootVisibilityScope;
@@ -94,6 +102,19 @@ const workshopAuthority: WorkshopAuthorizationAuthority = {
 };
 
 const reader: TaprootAuthorizedReaderLike = actualReader;
+const searchIntegration: Promise<WorkshopSearchIntegrationV1> =
+  createWorkshopSearchIntegrationV1({
+    db: db as unknown as WorkshopD1DatabaseLike,
+    taproot: options,
+    hostCapability,
+    installationId,
+    registrationContext: workshopAuthorization,
+  });
+const producerFactories = [
+  createExternalSearchDomainMutationCoordinatorV1,
+  createExternalSearchDomainPolicyAuthorityV1,
+  createExternalSearchProducerGuardV1,
+] as const;
 const writer = {
   createItem: (input) =>
     createItem(db, options, guard, taprootAuthorization, input),
@@ -158,4 +179,6 @@ void [
   receiptCompatible,
   noRawReads,
   noDeepWriteResult,
+  searchIntegration,
+  producerFactories,
 ];

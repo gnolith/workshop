@@ -1,4 +1,5 @@
 import { createWorkshopMcpServer } from '../mcp.js';
+import { createWorkshopToolDispatcher } from '../mcp/dispatcher.js';
 import { WorkshopError, normalizeWorkshopError } from '../protocol/errors.js';
 import type { WorkshopPrincipal } from '../protocol.js';
 import {
@@ -80,6 +81,18 @@ export function createTaskPacketHandler(
   });
 }
 
+export function createTaskHistoryHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    only(request, 'GET');
+    return runtime.tasks.history(
+      pathValue(request, 'tasks'),
+      authorize(principal, 'read'),
+    );
+  });
+}
+
 export function createTaskClaimHandler(
   runtime: WorkshopRuntime,
 ): WorkshopRouteHandler {
@@ -132,8 +145,145 @@ export function createMemoryHandler(
         actor,
       );
     }
-    throw methodNotAllowed('GET, PUT');
+    if (request.method === 'DELETE') {
+      await runtime.memories.delete(
+        slug,
+        Number(requiredHeader(request, 'x-workshop-revision')),
+        authorize(principal, 'memory-write'),
+      );
+      return { deleted: true };
+    }
+    throw methodNotAllowed('GET, PUT, DELETE');
   });
+}
+
+export function createMemoryHistoryHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    only(request, 'GET');
+    return runtime.memories.history(
+      pathValue(request, 'memories'),
+      authorize(principal, 'read'),
+    );
+  });
+}
+
+export function createPromptsHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    const prompts = requiredPrompts(runtime);
+    if (request.method === 'GET')
+      return prompts.list(queryObject(request), authorize(principal, 'read'));
+    if (request.method === 'POST')
+      return prompts.create(
+        (await json(request, runtime)) as never,
+        authorize(principal, 'prompt-write'),
+      );
+    throw methodNotAllowed('GET, POST');
+  });
+}
+
+export function createPromptHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    const prompts = requiredPrompts(runtime);
+    const id = pathValue(request, 'prompts');
+    if (request.method === 'GET')
+      return prompts.get(id, authorize(principal, 'read'));
+    if (request.method === 'PATCH')
+      return prompts.update(
+        id,
+        (await json(request, runtime)) as never,
+        authorize(principal, 'prompt-write'),
+      );
+    if (request.method === 'DELETE') {
+      await prompts.delete(
+        id,
+        Number(requiredHeader(request, 'x-workshop-revision')),
+        authorize(principal, 'prompt-write'),
+      );
+      return { deleted: true };
+    }
+    throw methodNotAllowed('GET, PATCH, DELETE');
+  });
+}
+
+export function createPromptHistoryHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    only(request, 'GET');
+    return requiredPrompts(runtime).history(
+      pathValue(request, 'prompts'),
+      authorize(principal, 'read'),
+    );
+  });
+}
+
+export function createSearchHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  return route(runtime, async (request, principal) => {
+    only(request, 'POST');
+    if (!runtime.search)
+      throw new WorkshopError(
+        'internal_error',
+        'Search integration is not registered',
+      );
+    return runtime.search.search(
+      (await json(request, runtime)) as never,
+      authorize(principal, 'read'),
+    );
+  });
+}
+
+export function createSearchAdminHandler(
+  runtime: WorkshopRuntime,
+): WorkshopRouteHandler {
+  const dispatcher = createWorkshopToolDispatcher(runtime);
+  return route(runtime, async (request, principal) => {
+    const actor = authorize(principal, 'search:admin');
+    if (request.method === 'GET') {
+      if (!runtime.search)
+        throw new WorkshopError(
+          'internal_error',
+          'Search integration is not registered',
+        );
+      return {
+        materialization: await runtime.search.materialization.health(actor),
+        semantic: await runtime.search.semantic.status(actor),
+      };
+    }
+    only(request, 'POST');
+    const result = await dispatcher.callTool(
+      { name: 'search_admin', arguments: await json(request, runtime) },
+      {
+        principal: actor,
+        requestId: request.headers.get('x-request-id') ?? crypto.randomUUID(),
+        signal: request.signal,
+      },
+    );
+    if (!result.ok)
+      throw new WorkshopError(
+        result.failure.error.code,
+        result.failure.error.message,
+        undefined,
+        result.failure.error.details,
+      );
+    return result.value;
+  });
+}
+
+function requiredPrompts(runtime: WorkshopRuntime) {
+  if (!runtime.prompts)
+    throw new WorkshopError(
+      'internal_error',
+      'Prompt producer is not registered',
+    );
+  return runtime.prompts;
 }
 
 export function createWorkshopMcpHandler(

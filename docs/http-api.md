@@ -3,8 +3,10 @@
 `@gnolith/workshop/site` exports:
 
 - `createTasksHandler`, `createTaskHandler`, `createTaskPacketHandler`
-- `createTaskClaimHandler`, `createTaskCompleteHandler`
-- `createMemoriesHandler`, `createMemoryHandler`
+- `createTaskClaimHandler`, `createTaskCompleteHandler`, `createTaskHistoryHandler`
+- `createMemoriesHandler`, `createMemoryHandler`, `createMemoryHistoryHandler`
+- `createPromptsHandler`, `createPromptHandler`, `createPromptHistoryHandler`
+- `createSearchHandler`, `createSearchAdminHandler`, `createSearchStatusHandler`
 - `createSparqlValidationHandler`, `createSparqlDryRunHandler`,
   `createSparqlQueryHandler`
 - `createWorkshopMcpHandler`, `createWorkshopHealthHandler`,

@@ -6,6 +6,12 @@ import type { D1DatabaseLike } from '../src/server/database.js';
 import type { WorkshopCursorCodec } from '../src/server/cursor.js';
 import type { WorkshopAuthorizationAuthority } from '../src/server/authorization.js';
 import { workshopMigrations } from '../src/migrations.js';
+import {
+  bootstrapTaprootAuthorization,
+  createTaprootHostWriteCapability,
+  initializeTaproot,
+} from '@gnolith/taproot';
+import { createWorkshopSearchIntegrationV1 } from '../src/server/search.js';
 
 export async function createTestContext() {
   const miniflare = new Miniflare({
@@ -15,6 +21,20 @@ export async function createTestContext() {
     d1Databases: { DB: `workshop-${crypto.randomUUID()}` },
   });
   const db = (await miniflare.getD1Database('DB')) as unknown as D1DatabaseLike;
+  const taproot = { baseIri: 'https://workshop-test.example' };
+  await initializeTaproot(db, taproot);
+  const key = await crypto.subtle.generateKey(
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const hostCapability = createTaprootHostWriteCapability(db, taproot, key);
+  await bootstrapTaprootAuthorization(
+    db,
+    taproot,
+    hostCapability,
+    TEST_AUTHORIZATION.installationId,
+  );
   for (const migration of workshopMigrations) {
     for (const statement of migration.sql.split(/;\s*(?:\r?\n|$)/u)) {
       if (statement.trim()) await db.prepare(statement).run();
@@ -83,6 +103,16 @@ export async function createTestContext() {
     },
   };
   const cursorCodec = createTestCursorCodec();
+  const search = await createWorkshopSearchIntegrationV1({
+    db,
+    taproot,
+    hostCapability,
+    installationId: TEST_AUTHORIZATION.installationId,
+    registrationContext: TEST_AUTHORIZATION,
+    clock: () => new Date(++tick),
+  });
+  for (const domain of [search.task, search.memory, search.prompt])
+    await domain.producer.adoptLegacyPage(TEST_AUTHORIZATION, { limit: 100 });
   const runtime = createWorkshopRuntime({
     db,
     authorization,
@@ -91,6 +121,7 @@ export async function createTestContext() {
     diamondHealth: async () => true,
     clock: () => new Date(++tick),
     resolvePrincipal: async (request) => principalFor(request),
+    search,
   });
   return {
     miniflare,
@@ -98,6 +129,7 @@ export async function createTestContext() {
     authorization,
     cursorCodec,
     runtime,
+    search,
     knowledgeCalls,
     dispose: () => miniflare.dispose(),
   };
@@ -174,6 +206,8 @@ function principalFor(request: Request): WorkshopPrincipal | null {
         'knowledge-write',
         'memory-write',
         'admin',
+        'prompt-write',
+        'search:admin',
       ],
     };
   }
@@ -181,7 +215,13 @@ function principalFor(request: Request): WorkshopPrincipal | null {
     return {
       ...TEST_AUTHORIZATION,
       principalId: 'agent:writer',
-      capabilities: ['read', 'task-write', 'knowledge-write', 'memory-write'],
+      capabilities: [
+        'read',
+        'task-write',
+        'knowledge-write',
+        'memory-write',
+        'prompt-write',
+      ],
     };
   }
   if (token === 'Bearer reader') {
@@ -205,6 +245,8 @@ export const TEST_AUTHORIZATION: WorkshopPrincipal = {
     'knowledge-write',
     'memory-write',
     'admin',
+    'prompt-write',
+    'search:admin',
   ],
   authorizationRevision: 1,
 };

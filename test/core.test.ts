@@ -39,6 +39,7 @@ describe('Workshop core', () => {
       cursorCodec: createTestCursorCodec(),
       diamondHealth: async () => true,
       createId: () => 'process-local-task',
+      search: context.search,
     });
 
     expect(core.persistence).toBe(context.db);

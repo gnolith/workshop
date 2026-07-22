@@ -1,11 +1,12 @@
 # Compatibility
 
-Workshop 0.3.x targets:
+Workshop 0.4.x targets:
 
 - Diamond `>=0.4.0 <0.5.0` through injected SQLite/query services
-- Taproot `>=0.3.0 <0.4.0`; this breaking line includes the shared
-  authorization context/visibility contract, authorized reader, mandatory
-  authored `Statement.text`, and text-bearing statement revision methods.
+- Taproot `>=0.4.0 <0.5.0`; this breaking line includes canonical external
+  Task, Memory, and Prompt producer registration, sealed atomic mutations,
+  bounded legacy adoption, authorized hydration, durable materialization, and
+  semantic-search administration.
 - Waystone plugin contract `>=0.1.0 <0.2.0`
 - React `>=19 <20`
 - TypeScript `>=5.9 <6`
@@ -20,11 +21,11 @@ consumers. These fixtures inject or stub Diamond, Taproot, identity, and host
 bindings; they verify Workshop package compatibility only and perform no remote
 deployment. They do not assemble or qualify a complete Gnolith Site.
 
-CI also packs released Taproot 0.3.0 source commit
-`9b7eb5de694e6020ce8466e01687b8077fbf915c` and checks bidirectional structural
+CI also packs released Taproot 0.4.0 source commit
+`819fe054ebb867e1ca92518bfd3b1aa6c5aa277d` and checks bidirectional structural
 compatibility for authorization contexts and visibility scopes, the real
-authorized reader, and host-capability-bound Workshop mutation, maintenance,
-and cursor guards. The packed runtime lane exercises native SQLite and persisted
+authorized reader, host-capability-bound guards, and all three Workshop search
+producer domains. The packed runtime lane exercises native SQLite and persisted
 Miniflare D1, including D1 disposal/recreation and cursor continuation. It also
 asserts that raw repository/deep-result surfaces are absent. This
 package-to-package lane detects contract drift without provisioning or accepting

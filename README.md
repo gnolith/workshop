@@ -1,9 +1,9 @@
 # Workshop
 
 `@gnolith/workshop` is Gnolith's agent-facing operating layer: durable research
-tasks, ephemeral task packets, reusable memories, authorization-aware graph access,
-Taproot-backed knowledge tools, Streamable HTTP MCP, Worker route factories,
-and the Workshop Waystone UI.
+tasks, ephemeral task packets, reusable memories, canonical prompts,
+authorization-aware unified search and graph access, Taproot-backed knowledge
+tools, Streamable HTTP MCP, Worker route factories, and the Workshop Waystone UI.
 
 One Codex Site is one research project. Workshop operates inside that Site-wide
 graph and task system; it does not add projects, memberships, agent sessions,
@@ -34,6 +34,15 @@ and read-authorized knowledge/health adapters:
 
 ```ts
 import { createWorkshopCore } from '@gnolith/workshop/core';
+import { createWorkshopSearchIntegrationV1 } from '@gnolith/workshop/server';
+
+const search = await createWorkshopSearchIntegrationV1({
+  db: persistence,
+  taproot,
+  hostCapability,
+  installationId,
+  registrationContext: principal,
+});
 
 const workshop = createWorkshopCore({
   persistence,
@@ -41,6 +50,7 @@ const workshop = createWorkshopCore({
   cursorCodec,
   knowledge: { authorizedReader, health: taprootHealth },
   diamondHealth,
+  search,
 });
 ```
 
@@ -77,15 +87,20 @@ export const workshop = createWorkshopRuntime({
   },
   diamondHealth: siteDiamond.health,
   resolvePrincipal: authenticateWorkshopRequest,
+  search: workshopSearch,
 });
 ```
 
-`siteAuthorization` is the single shared live source and mutation authority. Its
-separate Task, Memory, authorization-backfill, and cursor-snapshot methods must
-use Taproot's host-issued guards bound to exact `task-write`, `memory-write`,
-`search:admin`, or `read` capabilities, verify the current authorization and
-search-generation state, and execute the Workshop statements in the same host
-transaction/batch. They must never add or translate capabilities.
+`workshopSearch` is created once with `createWorkshopSearchIntegrationV1` after
+Taproot and Workshop migrations. The factory initializes Taproot's durable
+materialization state before registering the Task, Memory, and Prompt producers.
+All three domains commit the Workshop mutation, immutable revision snapshot,
+and canonical source event through Taproot's sealed atomic boundary. Legacy
+adoption and rebuilds are explicit bounded `search:admin` operations.
+
+`siteAuthorization` remains the single shared live source for authorized reads,
+backfill maintenance, and cursor snapshots. Host-issued guards must preserve
+exact capabilities and never add or translate them.
 `createAuthorizedReader` must return the public `AuthorizedTaprootReader` bound
 to that same source. Knowledge mutations are unavailable until that shared
 foundation is complete.

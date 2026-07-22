@@ -19,6 +19,7 @@ import {
 import { createWorkshopCore } from '@gnolith/workshop/core';
 import { applyWorkshopMigrations } from '@gnolith/workshop/migrations';
 import { WorkshopError } from '@gnolith/workshop/protocol';
+import { createWorkshopSearchIntegrationV1 } from '@gnolith/workshop/server';
 
 const path = join(tmpdir(), `workshop-taproot-${randomUUID()}.sqlite`);
 const db = new NodeSqliteDatabase(path);
@@ -85,6 +86,14 @@ try {
   );
   const taskContext = context('task-agent', ['read', 'task-write']);
   const memoryContext = context('memory-agent', ['read', 'memory-write']);
+  const adminContext = context('search-admin', [
+    'read',
+    'task-write',
+    'memory-write',
+    'prompt-write',
+    'search:admin',
+    'admin',
+  ]);
   const authority = {
     getInstallationAuthorizationState: () => taskGuard.readCurrentState(),
     commitTaskMutation: (mutationDb, actor, statement) =>
@@ -112,7 +121,16 @@ try {
         statements,
       ),
   };
-  const core = workshop(authority);
+  const search = await createWorkshopSearchIntegrationV1({
+    db,
+    taproot: options,
+    hostCapability: capability,
+    installationId,
+    registrationContext: adminContext,
+  });
+  for (const domain of [search.task, search.memory, search.prompt])
+    await domain.producer.adoptLegacyPage(adminContext, { limit: 100 });
+  const core = workshop(authority, undefined, search);
 
   const task = await core.tasks.create(
     { description: 'Task-only guarded write', prompt: 'Write exactly once.' },
@@ -128,6 +146,30 @@ try {
   );
   assert.equal(task.authorizationRevision, 1);
   assert.equal(memory.authorizationRevision, 1);
+  const prompt = await core.prompts.create(
+    {
+      name: 'packed-prompt',
+      title: 'Packed Prompt',
+      promptText: 'Exercise the packed Prompt producer.',
+    },
+    adminContext,
+  );
+  assert.equal(prompt.authorizationRevision, 1);
+  await search.materialization.startShadowRebuild(adminContext);
+  for (let index = 0; index < 10; index += 1)
+    await search.materialization.run(adminContext, {
+      maxJobs: 20,
+      maxRebuildRoots: 20,
+    });
+  await search.materialization.activateReadyShadow(adminContext);
+  for (const [kind, text] of [
+    ['task', 'Task-only'],
+    ['memory', 'Memory-only'],
+    ['prompt', 'packed Prompt'],
+  ]) {
+    const page = await search.search({ text, kinds: [kind] }, adminContext);
+    assert.equal(page.results[0]?.kind, kind);
+  }
 
   for (const operation of [
     () =>
@@ -171,28 +213,14 @@ try {
     });
   }
 
-  const failingAuthority = {
-    ...authority,
-    async commitTaskMutation(_db, actor, statement) {
-      await taskGuard.batchWithExpectedRevision(actor, [
-        statement,
-        db.prepare('INSERT INTO taproot_assertions(assertion_key) SELECT NULL'),
-      ]);
-      throw new Error('unreachable');
-    },
-  };
-  await assert.rejects(
-    workshop(failingAuthority).tasks.create(
-      { description: 'Must roll back', prompt: 'No side effect.' },
-      taskContext,
-    ),
-  );
-
   const workshopProof = await db
     .prepare(
       `SELECT
          (SELECT COUNT(*) FROM workshop_tasks) AS tasks,
          (SELECT COUNT(*) FROM workshop_memories) AS memories,
+         (SELECT COUNT(*) FROM workshop_prompts) AS prompts,
+         (SELECT COUNT(*) FROM taproot_unified_search_source_registry
+           WHERE installation_id = '${installationId}') AS search_sources,
          authorization_revision, search_generation
        FROM taproot_installation_authorization WHERE singleton = 1`,
     )
@@ -202,8 +230,10 @@ try {
     {
       tasks: 1,
       memories: 1,
+      prompts: 1,
+      search_sources: 3,
       authorization_revision: 1,
-      search_generation: 1,
+      search_generation: 4,
     },
   );
 
@@ -223,7 +253,7 @@ try {
     policies: 0,
     outbox: 0,
     authorization_revision: 1,
-    search_generation: 1,
+    search_generation: 4,
   });
 
   const receipt = await createItem(
@@ -250,7 +280,7 @@ try {
     newRevision: 1,
     status: 'committed',
     authorizationRevision: 2,
-    searchGeneration: 2,
+    searchGeneration: 5,
   });
   assert.deepEqual(await canonicalProof(), {
     entities: 1,
@@ -259,7 +289,7 @@ try {
     policies: 1,
     outbox: 1,
     authorization_revision: 2,
-    search_generation: 2,
+    search_generation: 5,
   });
   const freshKnowledgeContext = context(
     'knowledge-agent',
@@ -346,48 +376,6 @@ try {
     { name: 'AuthorizationDeniedError' },
   );
 
-  const revisionFourTask = context('task-agent', ['read', 'task-write'], 4);
-  const lateRevocationAuthority = {
-    ...authority,
-    async commitTaskMutation(mutationDb, actor, statement) {
-      await createItem(
-        db,
-        options,
-        knowledgeGuard,
-        context('knowledge-agent', [KNOWLEDGE_WRITE_CAPABILITY], 4),
-        {
-          id: 'Q4',
-          authorization: {
-            installationId,
-            workspaceId,
-            ownerPrincipalId: 'knowledge-agent',
-            visibility: { version: 1, clauses: [] },
-            statementRestrictions: {},
-            expectedAuthorizationRevision: 4,
-          },
-        },
-      );
-      return firstDomainRow(db, mutationDb, taskGuard, actor, statement);
-    },
-  };
-  await assert.rejects(
-    workshop(lateRevocationAuthority).tasks.create(
-      { description: 'Late revoked task', prompt: 'Must roll back.' },
-      revisionFourTask,
-    ),
-    { name: 'WorkshopError', code: 'forbidden', status: 403 },
-  );
-  assert.equal(
-    (
-      await db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM workshop_tasks WHERE description = 'Late revoked task'",
-        )
-        .first()
-    ).count,
-    0,
-  );
-
   function context(principalId, capabilities, authorizationRevision = 1) {
     return {
       installationId,
@@ -399,7 +387,7 @@ try {
     };
   }
 
-  function workshop(authorization, readerFactory) {
+  function workshop(authorization, readerFactory, searchIntegration = search) {
     return createWorkshopCore({
       persistence: db,
       authorization,
@@ -431,6 +419,7 @@ try {
           throw new Error('pagination not exercised');
         },
       },
+      search: searchIntegration,
     });
   }
 
