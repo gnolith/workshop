@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { workshopPackage } from '../src/index.js';
 import { createWorkshopMcpServer } from '../src/mcp.js';
 import { createWorkshopMcpHandler } from '../src/site.js';
 import { createTestContext, mcpRequest } from './helpers.js';
@@ -91,7 +92,14 @@ describe('Streamable HTTP MCP', () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      result: { protocolVersion: '2025-11-25', capabilities: { tools: {} } },
+      result: {
+        protocolVersion: '2025-11-25',
+        capabilities: { tools: {} },
+        serverInfo: {
+          name: workshopPackage.name,
+          version: workshopPackage.version,
+        },
+      },
     });
   });
 

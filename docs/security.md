@@ -29,8 +29,20 @@ trusted MCP client merely because a URL is known.
 
 Workshop's package boundary assumes the consumer supplies correct principals,
 protects bearer tokens and database handles, and configures intentional origins.
-Run `npm audit --omit=dev`, dependency review, code scanning, and focused
-authorization/context-query/MCP review before every public package release.
+Run the full `npm run security:dev-check`, `npm audit --omit=dev`, dependency
+review, code scanning, and focused authorization/context-query/MCP review before
+every public package release.
+
+## 0.3 development-tool compatibility record
+
+Workshop pins transitive development tools that participate in package-runtime
+qualification to `sharp@0.35.3` and `@hono/node-server@2.0.11`. The gate imports,
+constructs, and closes the MCP SDK's Node Streamable HTTP transport, resolves the
+same native Sharp installation used from Miniflare's dependency context, and
+performs a PNG-to-WebP conversion before requiring a zero-vulnerability full
+audit. Hono 2.0.5 fixed the original Windows static-file path traversal but was
+rejected because a later WebSocket-abort denial-of-service advisory affects
+2.0.0 through 2.0.9.
 
 ## 0.1 focused review record
 
