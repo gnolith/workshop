@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createWorkshopClient, taskState, type Task } from '../src/protocol.js';
-import { SparqlService } from '../src/server/sparql.js';
+import { ContextQueryValidator } from '../src/server/sparql.js';
 import { memorySlug, requiredText } from '../src/server/validation.js';
 
 const base: Task = {
@@ -13,6 +13,14 @@ const base: Task = {
   revision: 1,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
+  installationId: 'installation:test',
+  ownerPrincipalId: 'agent:test',
+  workspaceId: 'workspace:test',
+  visibility: {
+    version: 1,
+    clauses: [[{ kind: 'workspace', workspaceId: 'workspace:test' }]],
+  },
+  authorizationRevision: 1,
 };
 
 describe('protocol and validation', () => {
@@ -38,10 +46,8 @@ describe('protocol and validation', () => {
     expect(() => requiredText('12345', 'field', 4)).toThrow(/large/iu);
   });
 
-  it('uses one read-only SPARQL policy for validation and execution', async () => {
-    const service = new SparqlService({
-      execute: async () => ({ type: 'boolean', data: true, truncated: false }),
-    });
+  it('statically validates read-only stored graph queries', async () => {
+    const service = new ContextQueryValidator();
     await expect(service.validate('ASK { }')).resolves.toMatchObject({
       valid: true,
       queryType: 'ASK',

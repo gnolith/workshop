@@ -4,9 +4,9 @@ import {
   normalizeWorkshopError,
   type WorkshopErrorBody,
 } from '../protocol/errors.js';
-import type { WorkshopPrincipal } from '../protocol.js';
+import { hasWorkshopCapability, type WorkshopPrincipal } from '../protocol.js';
 import { authorize } from '../server/authorization.js';
-import { KNOWLEDGE_TOOL_NAMES } from '../server/knowledge.js';
+import { KNOWLEDGE_READ_TOOL_NAMES } from '../server/knowledge.js';
 import type { WorkshopLimits } from '../server/limits.js';
 import { resolveLimits } from '../server/limits.js';
 import type { MemoryService } from '../server/memories.js';
@@ -16,7 +16,6 @@ import {
   type ObserveWorkshop,
 } from '../server/observability.js';
 import type { PacketService } from '../server/packets.js';
-import type { SparqlService } from '../server/sparql.js';
 import type { TaskService } from '../server/tasks.js';
 import { workshopTools, type WorkshopToolDefinition } from './tools.js';
 
@@ -25,7 +24,6 @@ export interface WorkshopToolRuntime {
   readonly tasks: TaskService;
   readonly memories: MemoryService;
   readonly packets: PacketService;
-  readonly sparql: SparqlService;
   readonly knowledge: KnowledgeService;
   readonly limits?: Partial<WorkshopLimits>;
   readonly observe?: ObserveWorkshop;
@@ -81,17 +79,14 @@ const DIRECT_TOOL_NAMES = [
   'list_memories',
   'get_memory',
   'upsert_memory',
-  'validate_sparql',
-  'dry_run_sparql',
-  'query_sparql',
 ] as const;
 
 const KNOWLEDGE_TOOL_NAME_SET: ReadonlySet<string> = new Set(
-  KNOWLEDGE_TOOL_NAMES,
+  KNOWLEDGE_READ_TOOL_NAMES,
 );
 const HANDLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...DIRECT_TOOL_NAMES,
-  ...KNOWLEDGE_TOOL_NAMES,
+  ...KNOWLEDGE_READ_TOOL_NAMES,
 ]);
 
 export function createWorkshopToolDispatcher(
@@ -101,15 +96,16 @@ export function createWorkshopToolDispatcher(
   const definitions = new Map(
     workshopTools.map((definition) => [definition.name, definition] as const),
   );
+  const availableTools = workshopTools;
 
   return {
-    tools: workshopTools,
+    tools: availableTools,
     listTools(principal) {
       const authorized = authorizeResult(principal, 'read');
       if (!authorized.ok) return authorized;
       return {
         ok: true,
-        value: workshopTools.filter((tool) =>
+        value: availableTools.filter((tool) =>
           hasCapability(authorized.value, tool.capability),
         ),
       };
@@ -149,7 +145,7 @@ export function createWorkshopToolDispatcher(
           runtime.observe,
           {
             operation: 'mcp.call',
-            principalId: authorized.value.id,
+            principalId: authorized.value.principalId,
             requestId: context.requestId,
           },
           () =>
@@ -168,6 +164,19 @@ export function createWorkshopToolDispatcher(
         return { ok: true, value };
       } catch (error) {
         const normalized = normalizeWorkshopError(error);
+        if (
+          normalized.code === 'unauthenticated' ||
+          normalized.code === 'forbidden'
+        ) {
+          const failure = authorizationFailure(normalized);
+          if (!failure.ok)
+            await observeAuthorizationFailure(
+              runtime,
+              failure.failure,
+              context,
+            );
+          return failure;
+        }
         return {
           ok: false,
           failure: {
@@ -195,60 +204,50 @@ async function executeTool(
   switch (name) {
     case 'list_tasks':
     case 'search_tasks':
-      return runtime.tasks.list(input);
+      return runtime.tasks.list(input, principal);
     case 'get_task_packet':
-      return runtime.packets.get(text(input.id, 'id'), signal);
+      return runtime.packets.get(text(input.id, 'id'), principal, signal);
     case 'create_task':
-      return runtime.tasks.create(input as never, principal.id);
+      return runtime.tasks.create(input as never, principal);
     case 'update_task': {
       const { id, ...update } = input;
-      return runtime.tasks.update(
-        text(id, 'id'),
-        update as never,
-        principal.id,
-      );
+      return runtime.tasks.update(text(id, 'id'), update as never, principal);
     }
     case 'archive_task': {
       const { id, expectedRevision, expectedUpdatedAt } = input;
-      return runtime.tasks.archive(text(id, 'id'), {
-        ...(expectedRevision === undefined ? {} : { expectedRevision }),
-        ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
-        principalId: principal.id,
-      } as never);
+      return runtime.tasks.archive(
+        text(id, 'id'),
+        {
+          ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+        } as never,
+        principal,
+      );
     }
     case 'claim_task':
-      return runtime.tasks.claim(text(input.id, 'id'), principal.id);
+      return runtime.tasks.claim(text(input.id, 'id'), principal);
     case 'complete_task':
       return runtime.tasks.complete(
         text(input.id, 'id'),
         input.result,
-        principal.id,
+        principal,
       );
     case 'list_memories':
-      return runtime.memories.list(input);
+      return runtime.memories.list(input, principal);
     case 'get_memory':
-      return runtime.memories.get(text(input.slug, 'slug'));
+      return runtime.memories.get(text(input.slug, 'slug'), principal);
     case 'upsert_memory': {
       const { slug, ...memory } = input;
       return runtime.memories.upsert(
         text(slug, 'slug'),
         memory as never,
-        principal.id,
+        principal,
       );
     }
-    case 'validate_sparql':
-      return runtime.sparql.validate(input.sparql);
-    case 'dry_run_sparql':
-      return runtime.sparql.dryRun(text(input.sparql, 'sparql'), { signal });
-    case 'query_sparql':
-      return runtime.sparql.query(text(input.sparql, 'sparql'), { signal });
   }
 
   if (KNOWLEDGE_TOOL_NAME_SET.has(name)) {
-    return runtime.knowledge.call(
-      { name, input },
-      { principalId: principal.id, requestId },
-    );
+    return runtime.knowledge.call({ name, input }, { ...principal, requestId });
   }
   throw new WorkshopError('internal_error', `Tool ${name} has no handler`);
 }
@@ -287,7 +286,9 @@ async function observeAuthorizationFailure(
     durationMs: 0,
     errorCode: failure.error.code,
     requestId: context.requestId,
-    ...(context.principal ? { principalId: context.principal.id } : {}),
+    ...(context.principal
+      ? { principalId: context.principal.principalId }
+      : {}),
   });
 }
 
@@ -295,10 +296,7 @@ function hasCapability(
   principal: WorkshopPrincipal,
   capability: WorkshopToolDefinition['capability'],
 ): boolean {
-  return (
-    principal.capabilities.includes(capability) ||
-    principal.capabilities.includes('admin')
-  );
+  return hasWorkshopCapability(principal.capabilities, capability);
 }
 
 function assertCompleteRegistry(): void {

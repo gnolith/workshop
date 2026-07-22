@@ -4,7 +4,7 @@ export interface WorkshopMigration {
   sql: string;
 }
 
-export const WORKSHOP_SCHEMA_VERSION = 3;
+export const WORKSHOP_SCHEMA_VERSION = 5;
 
 export const workshopMigrations: readonly WorkshopMigration[] = [
   {
@@ -151,9 +151,114 @@ SET version = 3,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
+  {
+    id: '0004_authorization',
+    checksum:
+      'sha256:4959f42d9bf12698aa75427fce891e9e40d8b5d496b39a5078e0edd67204b6d6',
+    sql: `ALTER TABLE workshop_tasks ADD COLUMN installation_id TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN owner_principal_id TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN workspace_id TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN visibility_scope TEXT
+  CHECK (visibility_scope IS NULL OR (json_valid(visibility_scope) AND json_type(visibility_scope) = 'object'));
+ALTER TABLE workshop_tasks ADD COLUMN authorization_revision INTEGER
+  CHECK (authorization_revision IS NULL OR authorization_revision >= 0);
+
+CREATE TABLE workshop_memories_v4 (
+  slug TEXT NOT NULL,
+  description TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  idempotency_key TEXT,
+  installation_id TEXT,
+  owner_principal_id TEXT,
+  workspace_id TEXT,
+  visibility_scope TEXT CHECK (
+    visibility_scope IS NULL OR (json_valid(visibility_scope) AND json_type(visibility_scope) = 'object')
+  ),
+  authorization_revision INTEGER CHECK (
+    authorization_revision IS NULL OR authorization_revision >= 0
+  ),
+  PRIMARY KEY (installation_id, slug),
+  CHECK (
+    (installation_id IS NULL AND owner_principal_id IS NULL AND workspace_id IS NULL
+      AND visibility_scope IS NULL AND authorization_revision IS NULL)
+    OR
+    (installation_id IS NOT NULL AND owner_principal_id IS NOT NULL AND workspace_id IS NOT NULL
+      AND visibility_scope IS NOT NULL AND authorization_revision IS NOT NULL)
+  )
+);
+
+INSERT INTO workshop_memories_v4
+  (slug, description, content, created_at, updated_at, revision)
+SELECT slug, description, content, created_at, updated_at, revision
+FROM workshop_memories;
+
+DROP TABLE workshop_memories;
+ALTER TABLE workshop_memories_v4 RENAME TO workshop_memories;
+CREATE INDEX workshop_memories_updated_idx
+  ON workshop_memories (updated_at DESC, slug);
+
+CREATE INDEX workshop_tasks_authorization_idx
+  ON workshop_tasks (installation_id, workspace_id, authorization_revision, updated_at DESC, id);
+CREATE INDEX workshop_memories_authorization_idx
+  ON workshop_memories (installation_id, workspace_id, authorization_revision, updated_at DESC, slug);
+CREATE UNIQUE INDEX workshop_memories_idempotency_idx
+  ON workshop_memories (installation_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+UPDATE workshop_schema
+SET version = 4,
+    package_version = '0.3.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
+  {
+    id: '0005_cursor_snapshots',
+    checksum:
+      'sha256:72b91be58d9f56d81c7cb237ca67370ba0766a5b96920848503bd69f07cde091',
+    sql: `CREATE TABLE workshop_cursor_snapshots (
+  id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  grant_digest TEXT NOT NULL,
+  authorization_revision INTEGER NOT NULL CHECK (authorization_revision >= 0),
+  search_generation INTEGER NOT NULL CHECK (search_generation >= 0),
+  domain TEXT NOT NULL CHECK (domain IN ('task', 'memory')),
+  operation TEXT NOT NULL,
+  query_digest TEXT NOT NULL,
+  filters_digest TEXT NOT NULL,
+  page_size INTEGER NOT NULL CHECK (page_size BETWEEN 1 AND 200),
+  entry_count INTEGER NOT NULL CHECK (entry_count BETWEEN 1 AND 1000),
+  issued_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE TABLE workshop_cursor_entries (
+  snapshot_id TEXT NOT NULL REFERENCES workshop_cursor_snapshots(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  record_id TEXT NOT NULL,
+  record_revision INTEGER NOT NULL CHECK (record_revision >= 1),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (snapshot_id, ordinal),
+  UNIQUE (snapshot_id, record_id)
+);
+
+CREATE INDEX workshop_cursor_snapshots_expiry_idx
+  ON workshop_cursor_snapshots (expires_at, id);
+
+UPDATE workshop_schema
+SET version = 5,
+    package_version = '0.3.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
 ] as const;
 
 export const expectedWorkshopTables = [
+  'workshop_cursor_entries',
+  'workshop_cursor_snapshots',
   'workshop_memories',
   'workshop_onboarding_runs',
   'workshop_onboarding_steps',
@@ -162,10 +267,14 @@ export const expectedWorkshopTables = [
 ] as const;
 
 export const expectedWorkshopIndexes = [
+  'workshop_cursor_snapshots_expiry_idx',
+  'workshop_memories_authorization_idx',
+  'workshop_memories_idempotency_idx',
   'workshop_memories_updated_idx',
   'workshop_onboarding_runs_state_idx',
   'workshop_onboarding_steps_state_idx',
   'workshop_tasks_role_idx',
+  'workshop_tasks_authorization_idx',
   'workshop_tasks_state_idx',
   'workshop_tasks_updated_idx',
 ] as const;

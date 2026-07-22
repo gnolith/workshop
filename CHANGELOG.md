@@ -2,7 +2,7 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
-## [0.2.3] - Unreleased
+## [0.3.0] - Unreleased
 
 ### Added
 
@@ -10,6 +10,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - Portable Workshop migration runner and D1/node:sqlite behavioral parity.
 - Monotonic task and memory revisions with legacy timestamp compatibility.
 - Durable, leased, resumable onboarding checkpoints with replay-safe writers.
+- Shared Taproot-shaped installation/workspace/principal authorization for
+  Tasks and Memories, including canonical visibility scopes and bounded legacy
+  backfill readiness tooling.
+- Durable bounded Task/Memory pagination snapshots with metadata-only entries,
+  host-keyed binding digests, expiry cleanup, and authorization/search-generation
+  revocation.
 
 ### Changed
 
@@ -20,6 +26,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
   claims are covered; statement removal remains text-exempt.
 - The Taproot adapter now exposes an exact typed consumer contract with a
   commit-pinned packed-peer conformance gate.
+- All Task/Memory service reads prefilter authorization before hydration and
+  recheck live state afterward. Legacy rows are quarantined; unscoped public
+  SPARQL/entity search fail closed; generic admin does not imply `search:admin`.
+- Backfill and cursor-snapshot writes now use separate exact Taproot domain
+  guards; released Taproot conformance covers packed native SQLite and persisted
+  D1 restart behavior.
 
 ## [0.1.1] - 2026-07-20
 

@@ -7,15 +7,37 @@ import type {
   TaskPage,
   UpdateTaskInput,
 } from '../protocol/tasks.js';
-import { taskState } from '../protocol/tasks.js';
-import { decodeCursor, encodeCursor } from './cursor.js';
+import {
+  assertCursorCandidatesBounded,
+  createCursorSnapshot,
+  encodeCursor,
+  openCursorSnapshot,
+  readCursorEntries,
+  requireUnchangedCursorState,
+  type CursorBinding,
+  type WorkshopCursorCodec,
+} from './cursor.js';
 import type { D1DatabaseLike } from './database.js';
 import type { WorkshopLimits } from './limits.js';
 import { resolveLimits } from './limits.js';
 import type { MemoryService } from './memories.js';
 import type { ObserveWorkshop, WorkshopOperation } from './observability.js';
 import { observed } from './observability.js';
-import type { SparqlService } from './sparql.js';
+import {
+  authorizeRecord,
+  defaultVisibility,
+  denied,
+  normalizeVisibilityScope,
+  requireCapability,
+  requireActiveWorkspace,
+  requireCurrentAuthorization,
+  serializeVisibilityScope,
+  visibilitySql,
+  type AuthorizationContext,
+  type VisibilityScopeV1,
+  type WorkshopAuthorizationAuthority,
+} from './authorization.js';
+import type { ContextQueryValidator } from './sparql.js';
 import {
   contextQueries,
   isoDate,
@@ -42,16 +64,24 @@ interface TaskRow {
   created_at: string;
   updated_at: string;
   revision: number;
+  installation_id: string | null;
+  owner_principal_id: string | null;
+  workspace_id: string | null;
+  visibility_scope: string | null;
+  authorization_revision: number | null;
 }
 
 const NEXT_UPDATED_AT =
   "CASE WHEN ? > updated_at THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END";
+const AUTHORIZED_ID_BATCH = 80;
 
 export interface TaskServiceOptions {
   limits?: Partial<WorkshopLimits>;
   clock?: () => Date;
   createId?: () => string;
   observe?: ObserveWorkshop;
+  authorization: WorkshopAuthorizationAuthority;
+  cursorCodec: WorkshopCursorCodec;
 }
 
 export class TaskService {
@@ -62,25 +92,50 @@ export class TaskService {
   constructor(
     readonly db: D1DatabaseLike,
     readonly memories: MemoryService,
-    readonly sparql: SparqlService,
-    private readonly options: TaskServiceOptions = {},
+    readonly queryValidator: ContextQueryValidator,
+    private readonly options: TaskServiceOptions,
   ) {
+    if (!options.authorization || !options.cursorCodec) throw denied();
     this.#limits = resolveLimits(options.limits);
     this.#clock = options.clock ?? (() => new Date());
     this.#createId = options.createId ?? (() => crypto.randomUUID());
   }
 
-  async get(id: string): Promise<Task> {
-    const row = await this.#getRow(id);
-    if (!row) throw new WorkshopError('not_found', `Task ${id} was not found`);
-    return toTask(row);
+  async get(id: string, authorization: AuthorizationContext): Promise<Task> {
+    const context = await this.#context(authorization);
+    const row = await this.#getRow(id, context);
+    if (!row) throw denied();
+    const task = toTask(row);
+    await this.#recheck(row, context);
+    return task;
   }
 
-  async list(filters: TaskFilters = {}): Promise<TaskPage> {
+  async list(
+    filters: TaskFilters = {},
+    authorization: AuthorizationContext,
+  ): Promise<TaskPage> {
     const limit = pageLimit(filters.limit, this.#limits);
-    const cursor = decodeCursor(filters.cursor);
-    const clauses: string[] = [];
-    const values: unknown[] = [];
+    const context = await this.#context(authorization);
+    const updatedAfter = filters.updatedAfter
+      ? isoDate(filters.updatedAfter, 'updatedAfter')
+      : null;
+    const textFilter = filters.text?.trim() || null;
+    const binding: CursorBinding = {
+      operation: 'task.query',
+      domain: 'task',
+      query: 'updated_at_desc__id_asc.v1',
+      filters: {
+        role: filters.role ?? null,
+        state: filters.state ?? null,
+        claimed: filters.claimed ?? null,
+        updatedAfter,
+        text: textFilter,
+        limit,
+      },
+    };
+    const visibility = visibilitySql('workshop_tasks', context);
+    const clauses: string[] = [visibility.sql];
+    const values: unknown[] = [...visibility.values];
     if (filters.role) {
       clauses.push('role = ?');
       values.push(filters.role);
@@ -89,15 +144,15 @@ export class TaskService {
       clauses.push('claimed = ?');
       values.push(filters.claimed ? 1 : 0);
     }
-    if (filters.updatedAfter) {
+    if (updatedAfter) {
       clauses.push('updated_at >= ?');
-      values.push(isoDate(filters.updatedAfter, 'updatedAfter'));
+      values.push(updatedAfter);
     }
-    if (filters.text?.trim()) {
+    if (textFilter) {
       clauses.push(
         "(description LIKE ? ESCAPE '\\' OR prompt LIKE ? ESCAPE '\\')",
       );
-      const pattern = `%${escapeLike(filters.text.trim())}%`;
+      const pattern = `%${escapeLike(textFilter)}%`;
       values.push(pattern, pattern);
     }
     switch (filters.state) {
@@ -118,61 +173,145 @@ export class TaskService {
         );
         break;
     }
-    if (cursor) {
-      clauses.push('(updated_at < ? OR (updated_at = ? AND id > ?))');
-      values.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+    let snapshot;
+    if (filters.cursor) {
+      snapshot = await openCursorSnapshot(
+        this.db,
+        this.options.authorization,
+        this.options.cursorCodec,
+        filters.cursor,
+        binding,
+        context,
+        this.#clock(),
+      );
+    } else {
+      const candidates = await this.db
+        .prepare(
+          `SELECT id, revision, updated_at FROM workshop_tasks
+           WHERE ${clauses.join(' AND ')}
+           ORDER BY updated_at DESC, id ASC LIMIT 1001`,
+        )
+        .bind(...values)
+        .all<{ id: string; revision: number; updated_at: string }>();
+      assertCursorCandidatesBounded(candidates.results.length);
+      if (candidates.results.length === 0) return { items: [], cursor: null };
+      snapshot = await createCursorSnapshot(
+        this.db,
+        this.options.authorization,
+        this.options.cursorCodec,
+        binding,
+        context,
+        candidates.results.map((row) => ({
+          id: row.id,
+          revision: row.revision,
+          updatedAt: normalizeDate(row.updated_at),
+        })),
+        limit,
+        this.#clock(),
+      );
     }
-    const sql = `SELECT * FROM workshop_tasks${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''} ORDER BY updated_at DESC, id ASC LIMIT ?`;
-    const result = await this.db
-      .prepare(sql)
-      .bind(...values, limit + 1)
-      .all<TaskRow>();
-    const rows = result.results ?? [];
+    const entries = await readCursorEntries(this.db, snapshot, limit);
+    const hydrated: TaskRow[] = [];
+    for (
+      let offset = 0;
+      offset < entries.length;
+      offset += AUTHORIZED_ID_BATCH
+    ) {
+      const batch = entries.slice(offset, offset + AUTHORIZED_ID_BATCH);
+      const placeholders = batch.map(() => '?').join(', ');
+      const result = await this.db
+        .prepare(
+          `SELECT * FROM workshop_tasks
+           WHERE id IN (${placeholders}) AND ${visibility.sql}`,
+        )
+        .bind(...batch.map(({ id }) => id), ...visibility.values)
+        .all<TaskRow>();
+      hydrated.push(...result.results);
+    }
+    const byId = new Map(hydrated.map((row) => [row.id, row]));
+    const rows = entries.map((entry) => {
+      const row = byId.get(entry.id);
+      if (
+        !row ||
+        row.revision !== entry.revision ||
+        normalizeDate(row.updated_at) !== entry.updatedAt
+      )
+        throw denied();
+      return row;
+    });
+    await this.#recheckAll(rows, context);
+    await requireUnchangedCursorState(
+      this.options.authorization,
+      context,
+      snapshot.state,
+    );
     const visible = rows.slice(0, limit);
-    const last = visible.at(-1);
     return {
       items: visible.map(toTask),
       cursor:
-        rows.length > limit && last
-          ? encodeCursor({
-              updatedAt: normalizeDate(last.updated_at),
-              id: last.id,
-            })
+        rows.length > limit
+          ? await encodeCursor(
+              this.options.cursorCodec,
+              snapshot,
+              snapshot.start + limit,
+            )
           : null,
     };
   }
 
-  search(filters: TaskFilters = {}): Promise<TaskPage> {
-    return this.list(filters);
+  search(
+    filters: TaskFilters = {},
+    authorization: AuthorizationContext,
+  ): Promise<TaskPage> {
+    return this.list(filters, authorization);
   }
 
-  async create(input: CreateTaskInput, principalId?: string): Promise<Task> {
+  async create(
+    input: CreateTaskInput,
+    authorization: AuthorizationContext,
+  ): Promise<Task> {
+    const context = await this.#context(authorization, 'task-write');
+    const workspaceId = requireActiveWorkspace(context);
+    const scope = normalizeVisibilityScope(
+      input.visibility ?? defaultVisibility(context),
+    );
     const idempotencyKey = optionalText(
       input.idempotencyKey,
       'idempotencyKey',
       256,
     );
-    const normalized = await this.#validateInput(input);
-    if (idempotencyKey) {
+    const storedIdempotencyKey = idempotencyKey
+      ? `${context.installationId}\u0000${workspaceId}\u0000${context.principalId}\u0000${idempotencyKey}`
+      : undefined;
+    const normalized = await this.#validateInput(input, context);
+    if (storedIdempotencyKey) {
+      const predicate = visibilitySql('workshop_tasks', context);
       const existing = await this.db
-        .prepare('SELECT * FROM workshop_tasks WHERE idempotency_key = ?')
-        .bind(idempotencyKey)
+        .prepare(
+          `SELECT * FROM workshop_tasks WHERE idempotency_key = ? AND ${predicate.sql}`,
+        )
+        .bind(storedIdempotencyKey, ...predicate.values)
         .first<TaskRow>();
-      if (existing) return idempotentTask(existing, normalized);
+      if (existing) {
+        await this.#recheck(existing, context);
+        return idempotentTask(existing, { ...normalized, visibility: scope });
+      }
     }
     const id = this.#createId();
     const now = this.#clock().toISOString();
-    return this.#mutation('task.create', principalId, id, async () => {
+    return this.#mutation('task.create', context.principalId, id, async () => {
       try {
-        const row = await this.db
+        const mutation = this.db
           .prepare(
             `INSERT INTO workshop_tasks
-             (id, idempotency_key, description, role, prompt, context_queries, memory_slugs, claimed, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?) RETURNING *`,
+             (id, idempotency_key, description, role, prompt, context_queries, memory_slugs, claimed,
+              created_at, updated_at, installation_id, owner_principal_id, workspace_id,
+              visibility_scope, authorization_revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
           )
           .bind(
             id,
-            idempotencyKey ?? null,
+            storedIdempotencyKey ?? null,
             normalized.description,
             normalized.role ?? null,
             normalized.prompt,
@@ -180,18 +319,39 @@ export class TaskService {
             JSON.stringify(normalized.memorySlugs),
             now,
             now,
-          )
-          .first<TaskRow>();
+            context.installationId,
+            context.principalId,
+            workspaceId,
+            serializeVisibilityScope(scope),
+            context.authorizationRevision,
+          );
+        const row =
+          await this.options.authorization.commitTaskMutation<TaskRow>(
+            this.db,
+            context,
+            mutation,
+          );
         if (!row)
           throw new WorkshopError('internal_error', 'Task creation failed');
+        authorizeRecord(toAuthorizationRecord(row), context);
         return toTask(row);
       } catch (error) {
-        if (idempotencyKey && isUniqueError(error)) {
+        if (storedIdempotencyKey && isUniqueError(error)) {
+          const predicate = visibilitySql('workshop_tasks', context);
           const existing = await this.db
-            .prepare('SELECT * FROM workshop_tasks WHERE idempotency_key = ?')
-            .bind(idempotencyKey)
+            .prepare(
+              `SELECT * FROM workshop_tasks WHERE idempotency_key = ? AND ${predicate.sql}`,
+            )
+            .bind(storedIdempotencyKey, ...predicate.values)
             .first<TaskRow>();
-          if (existing) return idempotentTask(existing, normalized);
+          if (existing) {
+            await this.#recheck(existing, context);
+            return idempotentTask(existing, {
+              ...normalized,
+              visibility: scope,
+            });
+          }
+          throw denied();
         }
         throw error;
       }
@@ -201,9 +361,10 @@ export class TaskService {
   async update(
     id: string,
     input: UpdateTaskInput,
-    principalId?: string,
+    authorization: AuthorizationContext,
   ): Promise<Task> {
-    const current = await this.get(id);
+    const context = await this.#context(authorization, 'task-write');
+    const current = await this.get(id, context);
     if (current.completedAt || current.archivedAt) {
       throw new WorkshopError(
         'conflict',
@@ -236,18 +397,31 @@ export class TaskService {
     const slugs =
       input.memorySlugs === undefined
         ? current.memorySlugs
-        : memorySlugs(input.memorySlugs);
+        : memorySlugs(input.memorySlugs, this.#limits);
     if (input.contextQueries !== undefined)
       await this.#validateQueries(queries);
-    if (input.memorySlugs !== undefined) await this.memories.requireAll(slugs);
+    if (input.memorySlugs !== undefined)
+      await this.memories.requireAll(slugs, context);
+    const scope = normalizeVisibilityScope(
+      input.visibility ?? current.visibility,
+    );
+    if (
+      input.visibility &&
+      current.ownerPrincipalId !== context.principalId &&
+      !context.capabilities.includes('admin')
+    )
+      throw denied();
+    const predicate = visibilitySql('workshop_tasks', context);
     const now = this.#clock().toISOString();
-    return this.#mutation('task.update', principalId, id, async () => {
-      const row = await this.db
+    return this.#mutation('task.update', context.principalId, id, async () => {
+      const mutation = this.db
         .prepare(
           `UPDATE workshop_tasks
            SET description = ?, role = ?, prompt = ?, context_queries = ?, memory_slugs = ?,
+               visibility_scope = ?, authorization_revision = ?,
                revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
            WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
+             AND ${predicate.sql}
            RETURNING *`,
         )
         .bind(
@@ -256,18 +430,28 @@ export class TaskService {
           prompt,
           JSON.stringify(queries),
           JSON.stringify(slugs),
+          serializeVisibilityScope(scope),
+          context.authorizationRevision,
           now,
           now,
           id,
           expected.value,
-        )
-        .first<TaskRow>();
+          ...predicate.values,
+        );
+      const row = await this.options.authorization.commitTaskMutation<TaskRow>(
+        this.db,
+        context,
+        mutation,
+      );
       if (!row) {
+        if (!(await this.#getRow(id, await this.#context(context))))
+          throw denied();
         throw new WorkshopError(
           'conflict',
           `Task ${id} changed state or was updated since it was read`,
         );
       }
+      authorizeRecord(toAuthorizationRecord(row), context);
       return toTask(row);
     });
   }
@@ -277,61 +461,69 @@ export class TaskService {
     options: {
       expectedRevision?: number;
       expectedUpdatedAt?: string;
-      administrative?: boolean;
-      principalId?: string;
     },
+    authorization: AuthorizationContext,
   ): Promise<Task> {
+    const context = await this.#context(authorization, 'task-write');
+    const predicate = visibilitySql('workshop_tasks', context);
     const expected = revisionPrecondition(options);
     const now = this.#clock().toISOString();
-    return this.#mutation('task.archive', options.principalId, id, async () => {
-      const row = await this.db
+    return this.#mutation('task.archive', context.principalId, id, async () => {
+      const mutation = this.db
         .prepare(
           `UPDATE workshop_tasks SET archived_at = ?, claimed = 0, claimed_at = NULL,
              revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
            WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
-             AND (claimed = 0 OR ? = 1) RETURNING *`,
+             AND (claimed = 0 OR ? = 1) AND ${predicate.sql} RETURNING *`,
         )
-        .bind(now, now, now, id, expected.value, options.administrative ? 1 : 0)
-        .first<TaskRow>();
-      if (!row) {
-        const current = await this.#getRow(id);
-        if (!current)
-          throw new WorkshopError('not_found', `Task ${id} was not found`);
-        throw new WorkshopError(
-          'conflict',
-          current.archived_at
-            ? `Task ${id} is already archived`
-            : current.completed_at
-              ? `Task ${id} is already completed`
-              : !matchesRevisionPrecondition(current, expected)
-                ? `Task ${id} changed state or was updated since it was read`
-                : 'A claimed task requires administrative authorization to archive',
+        .bind(
+          now,
+          now,
+          now,
+          id,
+          expected.value,
+          context.capabilities.includes('admin') ? 1 : 0,
+          ...predicate.values,
         );
+      const row = await this.options.authorization.commitTaskMutation<TaskRow>(
+        this.db,
+        context,
+        mutation,
+      );
+      if (!row) {
+        if (!(await this.#getRow(id, await this.#context(context))))
+          throw denied();
+        throw new WorkshopError('conflict', 'Task state changed');
       }
+      authorizeRecord(toAuthorizationRecord(row), context);
       return toTask(row);
     });
   }
 
-  async claim(id: string, principalId?: string): Promise<Task> {
+  async claim(id: string, authorization: AuthorizationContext): Promise<Task> {
+    const context = await this.#context(authorization, 'task-write');
+    const predicate = visibilitySql('workshop_tasks', context);
     const now = this.#clock().toISOString();
-    return this.#mutation('task.claim', principalId, id, async () => {
-      const row = await this.db
+    return this.#mutation('task.claim', context.principalId, id, async () => {
+      const mutation = this.db
         .prepare(
           `UPDATE workshop_tasks SET claimed = 1, claimed_at = ?,
              revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
-           WHERE id = ? AND claimed = 0 AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
+           WHERE id = ? AND claimed = 0 AND completed_at IS NULL AND archived_at IS NULL
+             AND ${predicate.sql} RETURNING *`,
         )
-        .bind(now, now, now, id)
-        .first<TaskRow>();
+        .bind(now, now, now, id, ...predicate.values);
+      const row = await this.options.authorization.commitTaskMutation<TaskRow>(
+        this.db,
+        context,
+        mutation,
+      );
       if (!row) {
-        const current = await this.#getRow(id);
-        if (!current)
-          throw new WorkshopError('not_found', `Task ${id} was not found`);
-        throw new WorkshopError(
-          'conflict',
-          `Task ${id} cannot be claimed while ${taskState(toTask(current))}`,
-        );
+        if (!(await this.#getRow(id, await this.#context(context))))
+          throw denied();
+        throw new WorkshopError('conflict', 'Task state changed');
       }
+      authorizeRecord(toAuthorizationRecord(row), context);
       return toTask(row);
     });
   }
@@ -339,64 +531,92 @@ export class TaskService {
   async complete(
     id: string,
     resultValue: unknown,
-    principalId?: string,
+    authorization: AuthorizationContext,
   ): Promise<Task> {
+    const context = await this.#context(authorization, 'task-write');
+    const predicate = visibilitySql('workshop_tasks', context);
     const result = requiredText(
       resultValue,
       'result',
       this.#limits.maxResultBytes,
     );
     const now = this.#clock().toISOString();
-    return this.#mutation('task.complete', principalId, id, async () => {
-      const row = await this.db
-        .prepare(
-          `UPDATE workshop_tasks
+    return this.#mutation(
+      'task.complete',
+      context.principalId,
+      id,
+      async () => {
+        const mutation = this.db
+          .prepare(
+            `UPDATE workshop_tasks
            SET claimed = 0, claimed_at = NULL, completed_at = ?, result = ?,
                revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
-           WHERE id = ? AND claimed = 1 AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
-        )
-        .bind(now, result, now, now, id)
-        .first<TaskRow>();
-      if (!row) {
-        const current = await this.#getRow(id);
-        if (!current)
-          throw new WorkshopError('not_found', `Task ${id} was not found`);
-        throw new WorkshopError(
-          'conflict',
-          `Task ${id} is not claimable for completion`,
-        );
-      }
-      return toTask(row);
-    });
+           WHERE id = ? AND claimed = 1 AND completed_at IS NULL AND archived_at IS NULL
+             AND ${predicate.sql} RETURNING *`,
+          )
+          .bind(now, result, now, now, id, ...predicate.values);
+        const row =
+          await this.options.authorization.commitTaskMutation<TaskRow>(
+            this.db,
+            context,
+            mutation,
+          );
+        if (!row) {
+          if (!(await this.#getRow(id, await this.#context(context))))
+            throw denied();
+          throw new WorkshopError('conflict', 'Task state changed');
+        }
+        authorizeRecord(toAuthorizationRecord(row), context);
+        return toTask(row);
+      },
+    );
   }
 
   async resetAbandonedClaim(
     id: string,
     claimedBefore: string,
-    principalId: string,
+    authorization: AuthorizationContext,
   ): Promise<Task> {
+    const context = await this.#context(authorization, 'task-write');
+    requireCapability(context, 'admin');
+    const predicate = visibilitySql('workshop_tasks', context);
     const cutoff = isoDate(claimedBefore, 'claimedBefore');
     const now = this.#clock().toISOString();
-    return this.#mutation('task.reset-claim', principalId, id, async () => {
-      const row = await this.db
-        .prepare(
-          `UPDATE workshop_tasks SET claimed = 0, claimed_at = NULL,
+    return this.#mutation(
+      'task.reset-claim',
+      context.principalId,
+      id,
+      async () => {
+        const mutation = this.db
+          .prepare(
+            `UPDATE workshop_tasks SET claimed = 0, claimed_at = NULL,
              revision = revision + 1, updated_at = ${NEXT_UPDATED_AT}
-           WHERE id = ? AND claimed = 1 AND claimed_at < ? AND completed_at IS NULL AND archived_at IS NULL RETURNING *`,
-        )
-        .bind(now, now, id, cutoff)
-        .first<TaskRow>();
-      if (!row) {
-        throw new WorkshopError(
-          'conflict',
-          `Task ${id} has no abandoned claim before the supplied cutoff`,
-        );
-      }
-      return toTask(row);
-    });
+           WHERE id = ? AND claimed = 1 AND claimed_at < ? AND completed_at IS NULL AND archived_at IS NULL
+             AND ${predicate.sql} RETURNING *`,
+          )
+          .bind(now, now, id, cutoff, ...predicate.values);
+        const row =
+          await this.options.authorization.commitTaskMutation<TaskRow>(
+            this.db,
+            context,
+            mutation,
+          );
+        if (!row) {
+          throw new WorkshopError(
+            'conflict',
+            `Task ${id} has no abandoned claim before the supplied cutoff`,
+          );
+        }
+        authorizeRecord(toAuthorizationRecord(row), context);
+        return toTask(row);
+      },
+    );
   }
 
-  async #validateInput(input: CreateTaskInput): Promise<{
+  async #validateInput(
+    input: CreateTaskInput,
+    authorization?: AuthorizationContext,
+  ): Promise<{
     description: string;
     role?: string;
     prompt: string;
@@ -417,9 +637,9 @@ export class TaskService {
       this.#limits.maxPromptBytes,
     );
     const queries = contextQueries(input.contextQueries, this.#limits);
-    const slugs = memorySlugs(input.memorySlugs);
+    const slugs = memorySlugs(input.memorySlugs, this.#limits);
     await this.#validateQueries(queries);
-    await this.memories.requireAll(slugs);
+    if (authorization) await this.memories.requireAll(slugs, authorization);
     return {
       description,
       ...(role ? { role } : {}),
@@ -432,8 +652,7 @@ export class TaskService {
   async #validateQueries(queries: readonly ContextQuery[]): Promise<void> {
     for (const [queryIndex, query] of queries.entries()) {
       try {
-        await this.sparql.validate(query.sparql);
-        await this.sparql.dryRun(query.sparql);
+        await this.queryValidator.validate(query.sparql);
       } catch (error) {
         const normalized = normalizeWorkshopError(error);
         throw new WorkshopError(
@@ -467,12 +686,102 @@ export class TaskService {
     );
   }
 
-  #getRow(id: string): Promise<TaskRow | null> {
+  async #context(
+    authorization: AuthorizationContext,
+    capability: 'read' | 'task-write' | 'admin' = 'read',
+  ): Promise<AuthorizationContext> {
+    const context = await requireCurrentAuthorization(
+      this.options.authorization,
+      authorization,
+    );
+    requireCapability(context, capability);
+    return context;
+  }
+
+  async #recheck(
+    hydrated: TaskRow,
+    context: AuthorizationContext,
+  ): Promise<void> {
+    await requireCurrentAuthorization(this.options.authorization, context);
+    const predicate = visibilitySql('workshop_tasks', context);
+    const row = await this.db
+      .prepare(
+        `SELECT revision, installation_id, authorization_revision, visibility_scope
+         FROM workshop_tasks WHERE id = ? AND ${predicate.sql}`,
+      )
+      .bind(hydrated.id, ...predicate.values)
+      .first<
+        Pick<
+          TaskRow,
+          | 'revision'
+          | 'installation_id'
+          | 'authorization_revision'
+          | 'visibility_scope'
+        >
+      >();
+    if (
+      !row ||
+      row.revision !== hydrated.revision ||
+      row.authorization_revision !== hydrated.authorization_revision ||
+      row.visibility_scope !== hydrated.visibility_scope
+    )
+      throw denied();
+    authorizeRecord(toAuthorizationRecord(row), context);
+  }
+
+  async #recheckAll(
+    hydrated: readonly TaskRow[],
+    context: AuthorizationContext,
+  ): Promise<void> {
+    await requireCurrentAuthorization(this.options.authorization, context);
+    if (hydrated.length === 0) return;
+    const predicate = visibilitySql('workshop_tasks', context);
+    type AuthorizationRow = Pick<
+      TaskRow,
+      | 'id'
+      | 'revision'
+      | 'installation_id'
+      | 'authorization_revision'
+      | 'visibility_scope'
+    >;
+    const current = new Map<string, AuthorizationRow>();
+    for (
+      let offset = 0;
+      offset < hydrated.length;
+      offset += AUTHORIZED_ID_BATCH
+    ) {
+      const batch = hydrated.slice(offset, offset + AUTHORIZED_ID_BATCH);
+      const placeholders = batch.map(() => '?').join(', ');
+      const result = await this.db
+        .prepare(
+          `SELECT id, revision, installation_id, authorization_revision, visibility_scope
+           FROM workshop_tasks
+           WHERE id IN (${placeholders}) AND ${predicate.sql}`,
+        )
+        .bind(...batch.map(({ id }) => id), ...predicate.values)
+        .all<AuthorizationRow>();
+      for (const row of result.results) current.set(row.id, row);
+    }
+    for (const candidate of hydrated) {
+      const row = current.get(candidate.id);
+      if (
+        !row ||
+        row.revision !== candidate.revision ||
+        row.authorization_revision !== candidate.authorization_revision ||
+        row.visibility_scope !== candidate.visibility_scope
+      )
+        throw denied();
+      authorizeRecord(toAuthorizationRecord(row), context);
+    }
+  }
+
+  #getRow(id: string, context: AuthorizationContext): Promise<TaskRow | null> {
     if (typeof id !== 'string' || !id.trim())
       throw validation('Task id is required');
+    const predicate = visibilitySql('workshop_tasks', context);
     return this.db
-      .prepare('SELECT * FROM workshop_tasks WHERE id = ?')
-      .bind(id)
+      .prepare(`SELECT * FROM workshop_tasks WHERE id = ? AND ${predicate.sql}`)
+      .bind(id, ...predicate.values)
       .first<TaskRow>();
   }
 }
@@ -485,6 +794,7 @@ function idempotentTask(
     prompt: string;
     contextQueries: ContextQuery[];
     memorySlugs: string[];
+    visibility: VisibilityScopeV1;
   },
 ): Task {
   const task = toTask(row);
@@ -494,17 +804,21 @@ function idempotentTask(
     task.prompt !== input.prompt ||
     JSON.stringify(task.contextQueries) !==
       JSON.stringify(input.contextQueries) ||
-    JSON.stringify(task.memorySlugs) !== JSON.stringify(input.memorySlugs)
+    JSON.stringify(task.memorySlugs) !== JSON.stringify(input.memorySlugs) ||
+    serializeVisibilityScope(task.visibility) !==
+      serializeVisibilityScope(input.visibility)
   ) {
     throw new WorkshopError(
       'conflict',
-      `Idempotency key ${row.idempotency_key ?? ''} was already used with different task content`,
+      'Idempotent task input conflicts with existing content',
     );
   }
   return task;
 }
 
 function toTask(row: TaskRow): Task {
+  const authorization = toAuthorizationRecord(row);
+  if (!row.owner_principal_id || !row.workspace_id) throw denied();
   const parsedQueries = JSON.parse(row.context_queries) as ContextQuery[];
   const parsedSlugs = JSON.parse(row.memory_slugs) as string[];
   return {
@@ -524,6 +838,39 @@ function toTask(row: TaskRow): Task {
     createdAt: normalizeDate(row.created_at),
     updatedAt: normalizeDate(row.updated_at),
     revision: row.revision,
+    installationId: authorization.installationId,
+    ownerPrincipalId: row.owner_principal_id,
+    workspaceId: row.workspace_id,
+    visibility: authorization.visibility,
+    authorizationRevision: authorization.authorizationRevision,
+  };
+}
+
+function toAuthorizationRecord(
+  row: Pick<
+    TaskRow,
+    'installation_id' | 'authorization_revision' | 'visibility_scope'
+  >,
+) {
+  if (
+    !row.installation_id ||
+    row.authorization_revision === null ||
+    !row.visibility_scope
+  )
+    throw denied();
+  let visibility: unknown;
+  try {
+    visibility = JSON.parse(row.visibility_scope);
+  } catch {
+    throw denied();
+  }
+  const normalized = normalizeVisibilityScope(visibility as never);
+  if (serializeVisibilityScope(normalized) !== row.visibility_scope)
+    throw denied();
+  return {
+    installationId: row.installation_id,
+    authorizationRevision: row.authorization_revision,
+    visibility: normalized,
   };
 }
 
@@ -553,15 +900,6 @@ function revisionPrecondition(input: {
     return { column: 'updated_at', value: expectedUpdatedAt };
   }
   throw validation('expectedRevision or expectedUpdatedAt is required');
-}
-
-function matchesRevisionPrecondition(
-  row: TaskRow,
-  expected: ResolvedRevisionPrecondition,
-): boolean {
-  return expected.column === 'revision'
-    ? row.revision === expected.value
-    : row.updated_at === expected.value;
 }
 
 function normalizeDate(value: string): string {

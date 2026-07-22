@@ -138,15 +138,41 @@ async function installedVersion(
     .first<{ name: string }>();
   if (!schemaTable) return 0;
 
-  const row = await persistence
-    .prepare('SELECT version FROM workshop_schema WHERE singleton = 1')
-    .first<{ version: number }>();
-  if (!row || !Number.isSafeInteger(row.version) || row.version < 1) {
+  const metadata = await persistence
+    .prepare(
+      'SELECT singleton, version, package_version FROM workshop_schema ORDER BY singleton',
+    )
+    .all<{ singleton: number; version: number; package_version: string }>();
+  const rows = metadata.results ?? [];
+  const row = rows[0];
+  if (
+    rows.length !== 1 ||
+    row?.singleton !== 1 ||
+    !Number.isSafeInteger(row.version) ||
+    row.version < 1 ||
+    row.version > WORKSHOP_SCHEMA_VERSION ||
+    row.package_version !== packageVersionForSchema(row.version)
+  ) {
     throw new WorkshopMigrationError(
       'Workshop schema metadata is missing or invalid',
     );
   }
   return row.version;
+}
+
+function packageVersionForSchema(version: number): string | undefined {
+  switch (version) {
+    case 1:
+      return '0.1.0';
+    case 2:
+    case 3:
+      return '0.2.2';
+    case 4:
+    case 5:
+      return '0.3.0';
+    default:
+      return undefined;
+  }
 }
 
 async function loadDiamondMigrationLedger(): Promise<WorkshopMigrationLedgerApi> {
@@ -389,21 +415,52 @@ function legacySchema(installed: number): {
     column('created_at', 'TEXT', true, 'current_timestamp'),
     column('updated_at', 'TEXT', true, 'current_timestamp'),
     ...(installed >= 2 ? [column('revision', 'INTEGER', true, '1')] : []),
+    ...(installed >= 4
+      ? [
+          column('installation_id', 'TEXT'),
+          column('owner_principal_id', 'TEXT'),
+          column('workspace_id', 'TEXT'),
+          column('visibility_scope', 'TEXT'),
+          column('authorization_revision', 'INTEGER'),
+        ]
+      : []),
   ];
   const memoryColumns = [
-    column('slug', 'TEXT', false, null, 1),
+    column('slug', 'TEXT', installed >= 4, null, installed >= 4 ? 2 : 1),
     column('description', 'TEXT', true),
     column('content', 'TEXT', true),
     column('created_at', 'TEXT', true, 'current_timestamp'),
     column('updated_at', 'TEXT', true, 'current_timestamp'),
     ...(installed >= 2 ? [column('revision', 'INTEGER', true, '1')] : []),
+    ...(installed >= 4
+      ? [
+          column('idempotency_key', 'TEXT'),
+          column('installation_id', 'TEXT', false, null, 1),
+          column('owner_principal_id', 'TEXT'),
+          column('workspace_id', 'TEXT'),
+          column('visibility_scope', 'TEXT'),
+          column('authorization_revision', 'INTEGER'),
+        ]
+      : []),
   ];
   const tables: Record<string, LegacyTableSpec> = {
     workshop_memories: {
       columns: memoryColumns,
-      checks: installed >= 2 ? ['revision >= 1'] : [],
+      checks: [
+        ...(installed >= 2 ? ['revision >= 1'] : []),
+        ...(installed >= 4
+          ? [
+              "visibility_scope IS NULL OR (json_valid(visibility_scope) AND json_type(visibility_scope) = 'object')",
+              'authorization_revision IS NULL OR authorization_revision >= 0',
+              '(installation_id IS NULL AND owner_principal_id IS NULL AND workspace_id IS NULL AND visibility_scope IS NULL AND authorization_revision IS NULL) OR (installation_id IS NOT NULL AND owner_principal_id IS NOT NULL AND workspace_id IS NOT NULL AND visibility_scope IS NOT NULL AND authorization_revision IS NOT NULL)',
+            ]
+          : []),
+      ],
       foreignKeys: [],
-      constraintIndexes: ['pk:1:0:slug:0:BINARY'],
+      constraintIndexes:
+        installed >= 4
+          ? ['pk:1:0:installation_id:0:BINARY,slug:0:BINARY']
+          : ['pk:1:0:slug:0:BINARY'],
     },
     workshop_schema: {
       columns: [
@@ -424,6 +481,12 @@ function legacySchema(installed: number): {
         'claimed IN (0, 1)',
         '(claimed = 0 AND claimed_at IS NULL) OR (claimed = 1 AND claimed_at IS NOT NULL AND completed_at IS NULL AND archived_at IS NULL)',
         ...(installed >= 2 ? ['revision >= 1'] : []),
+        ...(installed >= 4
+          ? [
+              "visibility_scope IS NULL OR (json_valid(visibility_scope) AND json_type(visibility_scope) = 'object')",
+              'authorization_revision IS NULL OR authorization_revision >= 0',
+            ]
+          : []),
       ],
       foreignKeys: [],
       constraintIndexes: [
@@ -487,6 +550,52 @@ function legacySchema(installed: number): {
       ],
     };
   }
+  if (installed >= 5) {
+    tables.workshop_cursor_snapshots = {
+      columns: [
+        column('id', 'TEXT', false, null, 1),
+        column('installation_id', 'TEXT', true),
+        column('principal_id', 'TEXT', true),
+        column('grant_digest', 'TEXT', true),
+        column('authorization_revision', 'INTEGER', true),
+        column('search_generation', 'INTEGER', true),
+        column('domain', 'TEXT', true),
+        column('operation', 'TEXT', true),
+        column('query_digest', 'TEXT', true),
+        column('filters_digest', 'TEXT', true),
+        column('page_size', 'INTEGER', true),
+        column('entry_count', 'INTEGER', true),
+        column('issued_at', 'TEXT', true),
+        column('expires_at', 'TEXT', true),
+      ],
+      checks: [
+        'authorization_revision >= 0',
+        'search_generation >= 0',
+        "domain IN ('task', 'memory')",
+        'page_size BETWEEN 1 AND 200',
+        'entry_count BETWEEN 1 AND 1000',
+      ],
+      foreignKeys: [],
+      constraintIndexes: ['pk:1:0:id:0:BINARY'],
+    };
+    tables.workshop_cursor_entries = {
+      columns: [
+        column('snapshot_id', 'TEXT', true, null, 1),
+        column('ordinal', 'INTEGER', true, null, 2),
+        column('record_id', 'TEXT', true),
+        column('record_revision', 'INTEGER', true),
+        column('updated_at', 'TEXT', true),
+      ],
+      checks: ['ordinal >= 0', 'record_revision >= 1'],
+      foreignKeys: [
+        'snapshot_id->workshop_cursor_snapshots.id:NO ACTION:CASCADE:NONE',
+      ],
+      constraintIndexes: [
+        'pk:1:0:snapshot_id:0:BINARY,ordinal:0:BINARY',
+        'u:1:0:snapshot_id:0:BINARY,record_id:0:BINARY',
+      ],
+    };
+  }
   const indexDefinitions: Array<[string, string, string]> = [
     [
       'workshop_memories_updated_idx',
@@ -522,6 +631,32 @@ function legacySchema(installed: number): {
         'CREATE INDEX workshop_onboarding_steps_state_idx ON workshop_onboarding_steps (run_key, state, ordinal)',
       ],
     );
+  }
+  if (installed >= 4) {
+    indexDefinitions.push(
+      [
+        'workshop_memories_authorization_idx',
+        'workshop_memories',
+        'CREATE INDEX workshop_memories_authorization_idx ON workshop_memories (installation_id, workspace_id, authorization_revision, updated_at DESC, slug)',
+      ],
+      [
+        'workshop_memories_idempotency_idx',
+        'workshop_memories',
+        'CREATE UNIQUE INDEX workshop_memories_idempotency_idx ON workshop_memories (installation_id, idempotency_key) WHERE idempotency_key IS NOT NULL',
+      ],
+      [
+        'workshop_tasks_authorization_idx',
+        'workshop_tasks',
+        'CREATE INDEX workshop_tasks_authorization_idx ON workshop_tasks (installation_id, workspace_id, authorization_revision, updated_at DESC, id)',
+      ],
+    );
+  }
+  if (installed >= 5) {
+    indexDefinitions.push([
+      'workshop_cursor_snapshots_expiry_idx',
+      'workshop_cursor_snapshots',
+      'CREATE INDEX workshop_cursor_snapshots_expiry_idx ON workshop_cursor_snapshots (expires_at, id)',
+    ]);
   }
   const indexes: Record<string, string> = Object.fromEntries(
     indexDefinitions.map(([name, table, sql]) => [
@@ -579,6 +714,23 @@ function canonicalTableDefinitions(installed: number): Record<string, string> {
     Object.assign(
       definitions,
       createTableDefinitions(workshopMigrations[2]!.sql),
+    );
+  }
+  if (installed >= 4) {
+    const v4 = createTableDefinitions(workshopMigrations[3]!.sql);
+    definitions.workshop_memories = v4.workshop_memories_v4!.replace(
+      'createtableworkshop_memories_v4',
+      'createtable"workshop_memories"',
+    );
+    definitions.workshop_tasks = definitions.workshop_tasks!.replace(
+      ',check((claimed=0andclaimed_atisnull)',
+      ",installation_idtext,owner_principal_idtext,workspace_idtext,visibility_scopetextcheck(visibility_scopeisnullor(json_valid(visibility_scope)andjson_type(visibility_scope)='object')),authorization_revisionintegercheck(authorization_revisionisnullorauthorization_revision>=0),check((claimed=0andclaimed_atisnull)",
+    );
+  }
+  if (installed >= 5) {
+    Object.assign(
+      definitions,
+      createTableDefinitions(workshopMigrations[4]!.sql),
     );
   }
   return definitions;

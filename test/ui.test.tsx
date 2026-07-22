@@ -8,7 +8,7 @@ import {
   TaskEditor,
   TaskPacketView,
   TaskStateBadge,
-  WorkshopOnboarding,
+  hasUiCapability,
   workshopPlugin,
 } from '../src/ui.js';
 
@@ -23,6 +23,14 @@ const task: Task = {
   claimedAt: '2026-07-20T12:00:00.000Z',
   createdAt: '2026-07-20T12:00:00.000Z',
   updatedAt: '2026-07-20T12:00:00.000Z',
+  installationId: 'installation:test',
+  ownerPrincipalId: 'agent:test',
+  workspaceId: 'workspace:test',
+  visibility: {
+    version: 1,
+    clauses: [[{ kind: 'workspace', workspaceId: 'workspace:test' }]],
+  },
+  authorizationRevision: 1,
 };
 
 describe('Waystone UI surface', () => {
@@ -33,11 +41,18 @@ describe('Waystone UI surface', () => {
       'Memories',
     ]);
     expect(workshopPlugin.dashboardPanels).toHaveLength(1);
-    expect(workshopPlugin.onboarding).toHaveLength(1);
+    expect(workshopPlugin.onboarding).toHaveLength(0);
     expect(workshopPlugin.settingsPanels[0]).toMatchObject({
       capability: 'admin',
     });
     expect(workshopPlugin.entityPanels).toHaveLength(1);
+    expect(hasUiCapability(['admin'], 'search:admin')).toBe(false);
+    expect(hasUiCapability(['admin'], 'read')).toBe(false);
+    expect(hasUiCapability(['admin'], 'task-write')).toBe(false);
+    expect(hasUiCapability(['admin'], 'memory-write')).toBe(false);
+    expect(hasUiCapability(['admin'], 'knowledge-write')).toBe(false);
+    expect(hasUiCapability(['admin'], 'admin')).toBe(true);
+    expect(hasUiCapability(['search:admin'], 'search:admin')).toBe(true);
   });
 
   it('renders state with text and escapes untrusted content', () => {
@@ -49,7 +64,7 @@ describe('Waystone UI surface', () => {
     expect(markup).not.toContain('<script>');
   });
 
-  it('renders packets, editors, onboarding, permission, and MCP status accessibly', () => {
+  it('renders packets, editors, permission, and MCP status accessibly', () => {
     const packet = renderToStaticMarkup(
       <TaskPacketView
         packet={{
@@ -72,9 +87,6 @@ describe('Waystone UI surface', () => {
       'task-write',
     );
     expect(renderToStaticMarkup(<MemoryEditor />)).toContain('<form');
-    expect(renderToStaticMarkup(<WorkshopOnboarding />)).toContain(
-      'Preview seed plan',
-    );
     expect(
       renderToStaticMarkup(<McpStatusPanel status="unauthorized" />),
     ).toContain('unauthorized');

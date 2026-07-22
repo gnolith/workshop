@@ -8,7 +8,7 @@ import {
   type WorkshopDispatchFailure,
   type WorkshopToolDispatcher,
 } from './dispatcher.js';
-import { workshopTools, type WorkshopToolDefinition } from './tools.js';
+import type { WorkshopToolDefinition } from './tools.js';
 
 export const WORKSHOP_MCP_PROTOCOL_VERSION = '2025-11-25';
 const SUPPORTED_PROTOCOLS = new Set([
@@ -39,7 +39,7 @@ export function createWorkshopMcpServer(
   const limits = resolveLimits(runtime.limits);
   const dispatcher = createWorkshopToolDispatcher(runtime);
   return {
-    tools: workshopTools,
+    tools: dispatcher.tools,
     async handle(request) {
       if (request.method === 'GET') {
         return new Response('SSE listening is not enabled', {
@@ -191,7 +191,7 @@ async function dispatch(
           ? requested
           : WORKSHOP_MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: '@gnolith/workshop', version: '0.2.3' },
+        serverInfo: { name: '@gnolith/workshop', version: '0.3.0' },
         instructions:
           'Search existing tasks before creating overlapping work. Reading a task packet never claims it. All knowledge writes require the latest Taproot revision.',
       };

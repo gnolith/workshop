@@ -12,6 +12,11 @@ import {
 } from '../src/migrations.js';
 import { createWorkshopCore } from '../src/server/context.js';
 import type { WorkshopPersistence } from '../src/server/database.js';
+import {
+  createTestCursorCodec,
+  createTestKnowledgeOptions,
+  TEST_AUTHORIZATION,
+} from './helpers.js';
 
 describe('migration artifact integrity', () => {
   it('keeps the embedded migration byte-equivalent to the canonical SQL file', () => {
@@ -27,12 +32,14 @@ describe('migration artifact integrity', () => {
     const packageManifest = JSON.parse(
       readFileSync('package.json', 'utf8'),
     ) as { version?: unknown };
-    expect(packageManifest.version).toBe('0.2.3');
+    expect(packageManifest.version).toBe('0.3.0');
     expect(
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')
         .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
-    ).toEqual([true, true]);
+    ).toEqual([true, true, false, false]);
+    expect(workshopMigrations[3]!.sql).toContain("package_version = '0.3.0'");
+    expect(workshopMigrations[4]!.sql).toContain("package_version = '0.3.0'");
   });
 
   it('keeps migration identifiers unique and monotonically ordered', () => {
@@ -89,7 +96,7 @@ describe('migration artifact integrity', () => {
       ).resolves.toEqual({
         previousVersion: 2,
         version: WORKSHOP_SCHEMA_VERSION,
-        applied: [workshopMigrations[2]!.id],
+        applied: workshopMigrations.slice(2).map(({ id }) => id),
       });
     } finally {
       await fixture.dispose();
@@ -193,62 +200,58 @@ describe('migration artifact integrity', () => {
       );
       const core = createWorkshopCore({
         persistence: fixture.db,
-        knowledge: {
-          async call() {
-            throw new Error('not used');
+        authorization: {
+          async getInstallationAuthorizationState() {
+            return {
+              installationId: TEST_AUTHORIZATION.installationId,
+              authorizationRevision: TEST_AUTHORIZATION.authorizationRevision,
+              searchGeneration: 1,
+            };
           },
-          async health() {
-            return true;
+          async commitTaskMutation<T>(
+            _db: import('../src/server/database.js').D1DatabaseLike,
+            _context: import('../src/protocol.js').AuthorizationContext,
+            mutation: import('../src/server/database.js').D1PreparedStatementLike,
+          ) {
+            return mutation.first<T>();
+          },
+          async commitMemoryMutation<T>(
+            _db: import('../src/server/database.js').D1DatabaseLike,
+            _context: import('../src/protocol.js').AuthorizationContext,
+            mutation: import('../src/server/database.js').D1PreparedStatementLike,
+          ) {
+            return mutation.first<T>();
+          },
+          async commitTaskBackfill(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
+          },
+          async commitMemoryBackfill(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
+          },
+          async commitCursorSnapshot(_db, _context, _state, mutations) {
+            return _db.batch([...mutations]);
           },
         },
-        executeSparql: async () => ({
-          type: 'boolean',
-          data: true,
-          truncated: false,
-        }),
+        knowledge: createTestKnowledgeOptions(),
+        cursorCodec: createTestCursorCodec(),
+        diamondHealth: async () => true,
         clock: () => new Date('2026-07-20T12:00:01.000Z'),
       });
 
+      for (const taskId of ['future-claim', 'old-claim', 'legacy-task']) {
+        await expect(
+          core.tasks.get(taskId, TEST_AUTHORIZATION),
+        ).rejects.toMatchObject({
+          code: 'forbidden',
+          message: 'Authorization denied',
+        });
+      }
       await expect(
-        core.tasks.resetAbandonedClaim(
-          'future-claim',
-          '2026-07-20T12:30:00.000Z',
-          'agent:admin',
-        ),
-      ).rejects.toMatchObject({ code: 'conflict' });
-      await expect(core.tasks.get('future-claim')).resolves.toMatchObject({
-        claimed: true,
-        claimedAt: '2026-07-20T13:00:00.000Z',
+        core.memories.get('legacy-memory', TEST_AUTHORIZATION),
+      ).rejects.toMatchObject({
+        code: 'forbidden',
+        message: 'Authorization denied',
       });
-      await expect(
-        core.tasks.resetAbandonedClaim(
-          'old-claim',
-          '2026-07-20T12:30:00.000Z',
-          'agent:admin',
-        ),
-      ).resolves.toMatchObject({ claimed: false, revision: 2 });
-
-      const legacyMemory = await core.memories.get('legacy-memory');
-      expect(legacyMemory.updatedAt).toBe('2026-07-20T12:00:00.000Z');
-      await expect(
-        core.memories.upsert('legacy-memory', {
-          description: 'Legacy',
-          content: 'After',
-          expectedUpdatedAt: legacyMemory.updatedAt,
-        }),
-      ).resolves.toMatchObject({ content: 'After', revision: 2 });
-
-      const legacyTask = await core.tasks.get('legacy-task');
-      expect(legacyTask.updatedAt).toBe('2026-07-20T12:00:00.000Z');
-      const updated = await core.tasks.update('legacy-task', {
-        prompt: 'After',
-        expectedUpdatedAt: legacyTask.updatedAt,
-      });
-      await expect(
-        core.tasks.archive('legacy-task', {
-          expectedUpdatedAt: updated.updatedAt,
-        }),
-      ).resolves.toMatchObject({ archivedAt: '2026-07-20T12:00:01.000Z' });
     } finally {
       await fixture.dispose();
     }
@@ -294,6 +297,43 @@ describe('migration artifact integrity', () => {
       );
     } finally {
       await fixture.dispose();
+    }
+  });
+
+  it('rejects legacy schema metadata drift without recording adoption', async () => {
+    const fixture = await database();
+    try {
+      await execute(fixture.db, workshopMigrations[0]!.sql);
+      await fixture.db
+        .prepare(
+          "UPDATE workshop_schema SET package_version = 'tampered' WHERE singleton = 1",
+        )
+        .run();
+      await expect(
+        applyWorkshopMigrations(fixture.db, testLedger),
+      ).rejects.toThrow('Workshop schema metadata is missing or invalid');
+      expect(migrationRecords.get(fixture.db) ?? []).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('rejects singleton and schema-version tampering without recording adoption', async () => {
+    for (const tamper of [
+      'UPDATE workshop_schema SET version = 2 WHERE singleton = 1',
+      'PRAGMA ignore_check_constraints = ON; UPDATE workshop_schema SET singleton = 2 WHERE singleton = 1',
+    ]) {
+      const fixture = await database();
+      try {
+        await execute(fixture.db, workshopMigrations[0]!.sql);
+        await execute(fixture.db, tamper);
+        await expect(
+          applyWorkshopMigrations(fixture.db, testLedger),
+        ).rejects.toThrow('Workshop schema metadata is missing or invalid');
+        expect(migrationRecords.get(fixture.db) ?? []).toEqual([]);
+      } finally {
+        await fixture.dispose();
+      }
     }
   });
 
@@ -463,6 +503,26 @@ describe('migration artifact integrity', () => {
       ).rejects.toThrow('unexpected schema object view public_task_projection');
     } finally {
       await viewFixture.dispose();
+    }
+  });
+
+  it('rejects a weakened authorization migration without stamping adoption', async () => {
+    const fixture = await database();
+    try {
+      for (const migration of workshopMigrations.slice(0, 3))
+        await execute(fixture.db, migration.sql);
+      const weakened = workshopMigrations[3]!.sql.replace(
+        'AND visibility_scope IS NOT NULL AND authorization_revision IS NOT NULL)',
+        'AND authorization_revision IS NOT NULL)',
+      );
+      expect(weakened).not.toBe(workshopMigrations[3]!.sql);
+      await execute(fixture.db, weakened);
+      await expect(
+        applyWorkshopMigrations(fixture.db, testLedger),
+      ).rejects.toThrow('workshop_memories constraints do not match');
+      expect(migrationRecords.get(fixture.db) ?? []).toEqual([]);
+    } finally {
+      await fixture.dispose();
     }
   });
 

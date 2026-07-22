@@ -1,404 +1,144 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WorkshopError } from '../src/protocol/errors.js';
 import {
   createTaprootKnowledgeService,
+  KNOWLEDGE_MUTATION_TOOL_NAMES,
+  KNOWLEDGE_READ_TOOL_NAMES,
   KNOWLEDGE_TOOL_NAMES,
-  type TaprootRepositoryLike,
+  type TaprootAuthorizedReaderLike,
 } from '../src/server/knowledge.js';
+import { TEST_AUTHORIZATION } from './helpers.js';
 
-const statement = (text: string) => ({
-  id: 'Q1$statement',
-  type: 'statement' as const,
-  text,
-  rank: 'normal' as const,
-  mainsnak: { property: 'P1' as const },
-  qualifiers: {},
-  'qualifiers-order': [],
-  references: [],
-});
-
-function repository(): TaprootRepositoryLike {
-  const result = async () => ({ entityId: 'Q1', newRevision: 2 });
+function reader(): TaprootAuthorizedReaderLike {
   return {
-    searchEntitiesPage: vi.fn(result),
-    getEntity: vi.fn(result),
-    createItem: vi.fn(result),
-    createProperty: vi.fn(result),
-    setLabel: vi.fn(result),
-    setDescription: vi.fn(result),
-    addAlias: vi.fn(result),
-    removeAlias: vi.fn(result),
-    setSitelink: vi.fn(result),
-    removeSitelink: vi.fn(result),
-    addStatement: vi.fn(result),
-    replaceStatement: vi.fn(result),
-    removeStatement: vi.fn(result),
-    setStatementRank: vi.fn(result),
-    addQualifier: vi.fn(result),
-    removeQualifier: vi.fn(result),
-    addReference: vi.fn(result),
-    removeReference: vi.fn(result),
+    searchEntities: vi.fn(async () => ({ items: [], cursor: null })),
+    getEntity: vi.fn(async (entityId) => ({
+      entityId,
+      entity: { id: entityId, labels: { en: { value: 'Ada' } } },
+      revision: 2,
+    })),
   };
 }
 
+function service(taproot = reader()) {
+  const authorization = {
+    async getInstallationAuthorizationState() {
+      return {
+        installationId: TEST_AUTHORIZATION.installationId,
+        authorizationRevision: TEST_AUTHORIZATION.authorizationRevision,
+        searchGeneration: 1,
+      };
+    },
+  };
+  const authorizedReader = vi.fn(() => taproot);
+  return {
+    taproot,
+    authorization,
+    authorizedReader,
+    service: createTaprootKnowledgeService({
+      authorization,
+      authorizedReader,
+      health: async () => true,
+    }),
+  };
+}
+
+const context = { ...TEST_AUTHORIZATION, requestId: 'request-1' };
+
 describe('Taproot-backed knowledge adapter', () => {
-  it('exposes the complete approved family and delegates expected revisions', async () => {
+  it('exposes four authorized reads and keeps every mutation fail-closed', () => {
     expect(KNOWLEDGE_TOOL_NAMES).toHaveLength(20);
-    const taproot = repository();
-    const service = createTaprootKnowledgeService(taproot);
-    await service.call(
+    expect(KNOWLEDGE_READ_TOOL_NAMES).toEqual([
+      'search_entities',
+      'get_entity',
+      'get_entities',
+      'export_entity_json',
+    ]);
+    expect(KNOWLEDGE_MUTATION_TOOL_NAMES).toHaveLength(16);
+  });
+
+  it('routes candidate search only through the authorized reader using the shared source', async () => {
+    const fixture = service();
+    await fixture.service.call(
       {
-        name: 'set_label',
-        input: {
-          entityId: 'Q1',
-          language: 'en',
-          value: 'Ada',
-          expectedRevision: 1,
-        },
+        name: 'search_entities',
+        input: { query: 'Ada', language: 'en', limit: 5 },
       },
-      { principalId: 'agent:cataloguer', requestId: 'request-1' },
+      context,
     );
-    expect(taproot.setLabel).toHaveBeenCalledWith(
-      'Q1',
-      'en',
-      'Ada',
+    expect(fixture.taproot.searchEntities).toHaveBeenCalledWith('Ada', {
+      language: 'en',
+      limit: 5,
+    });
+    expect(fixture.authorizedReader).toHaveBeenCalledWith(
       expect.objectContaining({
-        expectedRevision: 1,
-        attribution: expect.objectContaining({ id: 'agent:cataloguer' }),
-        requestId: 'request-1',
+        installationId: TEST_AUTHORIZATION.installationId,
       }),
+      fixture.authorization,
     );
   });
 
-  it('rejects mutation calls without an expected revision', async () => {
-    const service = createTaprootKnowledgeService(repository());
+  it('hydrates single and bounded batch reads through the authorized reader', async () => {
+    const fixture = service();
     await expect(
-      service.call(
+      fixture.service.call(
+        { name: 'get_entity', input: { entityId: 'Q1' } },
+        context,
+      ),
+    ).resolves.toMatchObject({ entityId: 'Q1' });
+    await expect(
+      fixture.service.call(
+        { name: 'get_entities', input: { entityIds: ['Q1', 'P2'] } },
+        context,
+      ),
+    ).resolves.toHaveLength(2);
+    await expect(
+      fixture.service.call(
         {
-          name: 'remove_statement',
-          input: { entityId: 'Q1', statementId: 'Q1$statement' },
+          name: 'get_entities',
+          input: { entityIds: Array.from({ length: 101 }, () => 'Q1') },
         },
-        { principalId: 'agent:test' },
+        context,
       ),
     ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 
-  it('reports changed statement IDs for statement-level writes', async () => {
-    const service = createTaprootKnowledgeService(repository());
-    await expect(
-      service.call(
-        {
-          name: 'add_reference',
-          input: {
-            entityId: 'Q1',
-            statementId: 'Q1$statement',
-            reference: { snaks: {} },
-            text: 'Ada Lovelace worked as a programmer.',
-            expectedRevision: 1,
-          },
-        },
-        { principalId: 'agent:test' },
-      ),
-    ).resolves.toMatchObject({
-      entityId: 'Q1',
-      newRevision: 2,
-      changedStatementIds: ['Q1$statement'],
-    });
-  });
-
-  it('propagates Taproot stale-revision conflicts', async () => {
-    const taproot = repository();
-    taproot.setLabel = vi.fn(async () => {
-      throw new WorkshopError('conflict', 'Revision 1 is stale', 409);
-    });
-    const service = createTaprootKnowledgeService(taproot);
-    await expect(
-      service.call(
-        {
-          name: 'set_label',
-          input: {
-            entityId: 'Q1',
-            language: 'en',
-            value: 'Ada',
-            expectedRevision: 1,
-          },
-        },
-        { principalId: 'agent:test' },
-      ),
-    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
-  });
-
-  it.each([undefined, '', '   ', '\u00a0', '\u2003', '\u202f', '\u200b'])(
-    'rejects missing or Unicode-blank authored text before delegation (%j)',
-    async (authored) => {
-      const taproot = repository();
-      const service = createTaprootKnowledgeService(taproot);
-      await expect(
-        service.call(
-          {
-            name: 'set_statement_rank',
-            input: {
-              entityId: 'Q1',
-              statementId: 'Q1$statement',
-              rank: 'preferred',
-              text: authored,
-              expectedRevision: 1,
-            },
-          },
-          { principalId: 'agent:test' },
-        ),
-      ).rejects.toMatchObject({
-        code: 'validation_failed',
-        details: { field: 'text' },
-      });
-      expect(taproot.setStatementRank).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([undefined, '', '\u00a0', '\u200b'])(
-    'rejects statement objects without authored text (%j)',
-    async (authored) => {
-      const taproot = repository();
-      const service = createTaprootKnowledgeService(taproot);
-      const candidate = statement('valid');
-      (candidate as { text: unknown }).text = authored;
-      await expect(
-        service.call(
-          {
-            name: 'add_statement',
-            input: {
-              entityId: 'Q1',
-              statement: candidate,
-              expectedRevision: 1,
-            },
-          },
-          { principalId: 'agent:test' },
-        ),
-      ).rejects.toMatchObject({ code: 'validation_failed' });
-      expect(taproot.addStatement).not.toHaveBeenCalled();
-    },
-  );
-
-  it('validates authored text in create_item claims before delegation', async () => {
-    const taproot = repository();
-    const service = createTaprootKnowledgeService(taproot);
-    await expect(
-      service.call(
-        {
-          name: 'create_item',
-          input: { claims: { P1: [statement('\u2003')] } },
-        },
-        { principalId: 'agent:test' },
-      ),
-    ).rejects.toMatchObject({
-      code: 'validation_failed',
-      details: { field: 'claims.P1[0].text' },
-    });
-    expect(taproot.createItem).not.toHaveBeenCalled();
-
-    const authored = statement('  A deliberately authored claim.  ');
-    await service.call(
-      {
-        name: 'create_item',
-        input: { claims: { P1: [authored] } },
-      },
-      { principalId: 'agent:test' },
-    );
-    expect(taproot.createItem).toHaveBeenCalledWith(
-      expect.objectContaining({ claims: { P1: [authored] } }),
-    );
-  });
-
-  it('forwards unchanged-but-explicit and changed authored text exactly', async () => {
-    const taproot = repository();
-    const service = createTaprootKnowledgeService(taproot);
-    const unchanged = '  Existing authored explanation.  ';
-    const changed = 'Changed authored explanation.';
-
-    await service.call(
-      {
-        name: 'set_statement_rank',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          rank: 'preferred',
-          text: unchanged,
-          expectedRevision: 1,
-        },
-      },
-      { principalId: 'agent:test' },
-    );
-    expect(taproot.setStatementRank).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      'preferred',
-      unchanged,
-      expect.objectContaining({ expectedRevision: 1 }),
-    );
-
-    await service.call(
-      {
-        name: 'add_qualifier',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          snak: { property: 'P2' },
-          text: changed,
-          expectedRevision: 2,
-        },
-      },
-      { principalId: 'agent:test' },
-    );
-    expect(taproot.addQualifier).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      { property: 'P2' },
-      changed,
-      expect.objectContaining({ expectedRevision: 2 }),
-    );
-  });
-
-  it('forwards add and replacement statement text inside the exact object', async () => {
-    const taproot = repository();
-    const service = createTaprootKnowledgeService(taproot);
-    const added = statement('  Explicit text for the added statement.  ');
-    const replacement = statement('Changed text for the replacement.');
-
-    await service.call(
-      {
-        name: 'add_statement',
-        input: { entityId: 'Q1', statement: added, expectedRevision: 1 },
-      },
-      { principalId: 'agent:test' },
-    );
-    expect(taproot.addStatement).toHaveBeenCalledWith(
-      'Q1',
-      added,
-      expect.objectContaining({ expectedRevision: 1 }),
-    );
-
-    await service.call(
-      {
-        name: 'replace_statement',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          statement: replacement,
-          expectedRevision: 2,
-        },
-      },
-      { principalId: 'agent:test' },
-    );
-    expect(taproot.replaceStatement).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      replacement,
-      expect.objectContaining({ expectedRevision: 2 }),
-    );
-  });
-
-  it('forwards authored text in every qualifier/reference revision operation', async () => {
-    const taproot = repository();
-    const service = createTaprootKnowledgeService(taproot);
-    const context = { principalId: 'agent:test' };
-
-    await service.call(
-      {
-        name: 'remove_qualifier',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          property: 'P2',
-          ordinal: 0,
-          text: 'Qualifier removed after review.',
-          expectedRevision: 3,
-        },
-      },
-      context,
-    );
-    expect(taproot.removeQualifier).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      'P2',
-      0,
-      'Qualifier removed after review.',
-      expect.objectContaining({ expectedRevision: 3 }),
-    );
-
-    await service.call(
-      {
-        name: 'add_reference',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          reference: { hash: 'ref' },
-          text: 'Reference added from the primary source.',
-          expectedRevision: 4,
-        },
-      },
-      context,
-    );
-    expect(taproot.addReference).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      { hash: 'ref' },
-      'Reference added from the primary source.',
-      expect.objectContaining({ expectedRevision: 4 }),
-    );
-
-    await service.call(
-      {
-        name: 'remove_reference',
-        input: {
-          entityId: 'Q1',
-          statementId: 'Q1$statement',
-          hash: 'ref',
-          text: 'Reference removed because it was superseded.',
-          expectedRevision: 5,
-        },
-      },
-      context,
-    );
-    expect(taproot.removeReference).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      'ref',
-      'Reference removed because it was superseded.',
-      expect.objectContaining({ expectedRevision: 5 }),
-    );
-  });
-
-  it('keeps remove_statement text-exempt and preserves text in export', async () => {
-    const taproot = repository();
-    taproot.getEntity = vi.fn(async () => ({
-      entity: { claims: { P1: [statement('Persisted authored text.')] } },
-    }));
-    const service = createTaprootKnowledgeService(taproot);
-    await expect(
-      service.call(
-        {
-          name: 'remove_statement',
-          input: {
-            entityId: 'Q1',
-            statementId: 'Q1$statement',
-            expectedRevision: 1,
-          },
-        },
-        { principalId: 'agent:test' },
-      ),
-    ).resolves.toMatchObject({ changedStatementIds: ['Q1$statement'] });
-    expect(taproot.removeStatement).toHaveBeenCalledWith(
-      'Q1',
-      'Q1$statement',
-      expect.objectContaining({ expectedRevision: 1 }),
-    );
-
-    const exported = await service.call(
+  it('exports only authorized hydrated entity JSON', async () => {
+    const fixture = service();
+    const exported = await fixture.service.call(
       { name: 'export_entity_json', input: { entityId: 'Q1' } },
-      { principalId: 'agent:test' },
+      context,
     );
-    expect(JSON.parse(exported as string)).toMatchObject({
-      claims: { P1: [{ text: 'Persisted authored text.' }] },
+    expect(JSON.parse(exported as string)).toEqual({
+      id: 'Q1',
+      labels: { en: { value: 'Ada' } },
     });
+  });
+
+  it.each(KNOWLEDGE_MUTATION_TOOL_NAMES)(
+    'denies unavailable mutation %s before reader or writer access',
+    async (name) => {
+      const fixture = service();
+      await expect(
+        fixture.service.call({ name, input: { entityId: 'Q1' } }, context),
+      ).rejects.toMatchObject({
+        code: 'forbidden',
+        message: 'Authorization denied',
+      });
+      expect(fixture.authorizedReader).not.toHaveBeenCalled();
+      expect(fixture.taproot.getEntity).not.toHaveBeenCalled();
+      expect(fixture.taproot.searchEntities).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails health closed when the host probe throws', async () => {
+    const fixture = service();
+    const unavailable = createTaprootKnowledgeService({
+      authorization: fixture.authorization,
+      authorizedReader: fixture.authorizedReader,
+      health: async () => {
+        throw new Error('secret host detail');
+      },
+    });
+    await expect(unavailable.health?.()).resolves.toBe(false);
   });
 });

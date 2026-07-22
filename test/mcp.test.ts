@@ -20,8 +20,8 @@ async function createServerContext() {
 describe('Streamable HTTP MCP', () => {
   it('ships the complete deterministic tool schema surface', async () => {
     const { server } = await createServerContext();
-    expect(server.tools).toHaveLength(34);
-    expect(new Set(server.tools.map((tool) => tool.name)).size).toBe(34);
+    expect(server.tools).toHaveLength(15);
+    expect(new Set(server.tools.map((tool) => tool.name)).size).toBe(15);
     for (const tool of server.tools) {
       expect(tool.title.trim()).not.toBe('');
       expect(tool.description.trim()).not.toBe('');
@@ -39,35 +39,15 @@ describe('Streamable HTTP MCP', () => {
       type: 'integer',
       minimum: 1,
     });
-    for (const name of [
-      'set_statement_rank',
-      'add_qualifier',
-      'remove_qualifier',
-      'add_reference',
-      'remove_reference',
-    ]) {
-      const definition = server.tools.find((tool) => tool.name === name);
-      expect(definition?.inputSchema.required).toContain('text');
-      expect(definition?.inputSchema.properties.text).toMatchObject({
-        type: 'string',
-        minLength: 1,
-        pattern: '\\S',
-      });
-    }
-    expect(
-      server.tools.find((tool) => tool.name === 'remove_statement')?.inputSchema
-        .required,
-    ).not.toContain('text');
-    for (const name of ['add_statement', 'replace_statement']) {
-      const schema = server.tools.find((tool) => tool.name === name)
-        ?.inputSchema.properties.statement as { required?: string[] };
-      expect(schema.required).toContain('text');
-    }
-    const claims = server.tools.find((tool) => tool.name === 'create_item')
-      ?.inputSchema.properties.claims as {
-      additionalProperties?: { items?: { required?: string[] } };
-    };
-    expect(claims.additionalProperties?.items?.required).toContain('text');
+    expect(server.tools.map(({ name }) => name)).not.toEqual(
+      expect.arrayContaining([
+        'create_item',
+        'set_label',
+        'add_reference',
+        'validate_sparql',
+        'query_sparql',
+      ]),
+    );
   });
 
   it('interoperates with the official MCP TypeScript client', async () => {
@@ -130,19 +110,19 @@ describe('Streamable HTTP MCP', () => {
     const readerNames = readerBody.result.tools.map((tool) => tool.name);
     expect(readerNames).toContain('list_tasks');
     expect(readerNames).not.toContain('create_task');
-    const admin = await server.handle(
+    const fullyAuthorized = await server.handle(
       mcpRequest(
         { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} },
-        'admin',
+        'full',
         '2025-11-25',
       ),
     );
-    const adminBody = (await admin.json()) as {
+    const adminBody = (await fullyAuthorized.json()) as {
       result: { tools: Array<{ name: string }> };
     };
     const names = adminBody.result.tools.map((tool) => tool.name);
     expect(names).toContain('create_task');
-    expect(names).toContain('add_reference');
+    expect(names).not.toContain('add_reference');
     expect(names).not.toContain('reset_abandoned_claim');
     expect(names).toEqual([...names]);
   });

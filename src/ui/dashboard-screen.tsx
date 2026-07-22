@@ -18,8 +18,7 @@ export function WorkshopDashboardScreen({
 }) {
   const client = useWorkshopClient(clientSource);
   const instance = useId();
-  const canRead =
-    capabilities.includes('read') || capabilities.includes('admin');
+  const canRead = capabilities.includes('read');
   const { data, error, isLoading } = useSWR<
     { tasks: Task[]; memories: Memory[] },
     Error

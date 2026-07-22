@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { gzipSync } from 'node:zlib';
@@ -28,36 +29,73 @@ try {
       if (statement.trim()) await db.prepare(statement).run();
     }
   }
+  const authorizationContext = {
+    installationId: 'performance:installation',
+    principalId: 'performance',
+    activeWorkspaceId: 'performance:workspace',
+    workspaceIds: ['performance:workspace'],
+    capabilities: ['read', 'task-write', 'knowledge-write'],
+    authorizationRevision: 1,
+  };
   const runtime = createWorkshopRuntime({
     db,
-    executeSparql: async (query) =>
-      /ASK/iu.test(query)
-        ? { type: 'boolean', data: true, truncated: false }
-        : { type: 'bindings', data: [], count: 0, truncated: false },
-    knowledge: {
-      async call(call) {
-        return { entityId: call.input.entityId ?? 'Q1', newRevision: 2 };
+    authorization: {
+      async getInstallationAuthorizationState() {
+        return {
+          installationId: authorizationContext.installationId,
+          authorizationRevision: 1,
+          searchGeneration: 1,
+        };
       },
-      async health() {
-        return true;
+      async commitTaskMutation(_db, _context, mutation) {
+        return mutation.first();
+      },
+      async commitMemoryMutation(_db, _context, mutation) {
+        return mutation.first();
+      },
+      async commitTaskBackfill(_db, _context, _state, mutations) {
+        return _db.batch([...mutations]);
+      },
+      async commitMemoryBackfill(_db, _context, _state, mutations) {
+        return _db.batch([...mutations]);
+      },
+      async commitCursorSnapshot(_db, _context, _state, mutations) {
+        return _db.batch([...mutations]);
       },
     },
-    resolvePrincipal: async () => ({
-      id: 'performance',
-      capabilities: ['read', 'task-write', 'knowledge-write'],
-    }),
+    knowledge: {
+      authorizedReader() {
+        return {
+          async getEntity(entityId) {
+            return { entityId, entity: { id: entityId }, revision: 1 };
+          },
+          async searchEntities() {
+            return { items: [], cursor: null };
+          },
+        };
+      },
+      health: async () => true,
+    },
+    diamondHealth: async () => true,
+    cursorCodec: opaqueCursorCodec(),
+    resolvePrincipal: async () => authorizationContext,
   });
   for (let index = 0; index < 20; index++) {
-    await runtime.tasks.create({
-      description: `Performance task ${index}`,
-      prompt: 'Measure bounded Workshop operations.',
-    });
+    await runtime.tasks.create(
+      {
+        description: `Performance task ${index}`,
+        prompt: 'Measure bounded Workshop operations.',
+      },
+      authorizationContext,
+    );
   }
-  const packetTask = await runtime.tasks.create({
-    description: 'Packet performance',
-    prompt: 'Compile current context.',
-    contextQueries: [{ sparql: 'ASK { }' }],
-  });
+  const packetTask = await runtime.tasks.create(
+    {
+      description: 'Packet performance',
+      prompt: 'Compile an authorized packet without an unscoped graph query.',
+    },
+    authorizationContext,
+  );
   const mcp = createWorkshopMcpServer(runtime);
   const mcpRequest = (id, method) =>
     new Request('https://performance.example/mcp', {
@@ -83,8 +121,12 @@ try {
       }),
     });
   const metrics = {
-    taskSearchMs: await elapsed(() => runtime.tasks.list({ text: 'bounded' })),
-    taskPacketMs: await elapsed(() => runtime.packets.get(packetTask.id)),
+    taskSearchMs: await elapsed(() =>
+      runtime.tasks.list({ text: 'bounded' }, authorizationContext),
+    ),
+    taskPacketMs: await elapsed(() =>
+      runtime.packets.get(packetTask.id, authorizationContext),
+    ),
     mcpInitializeMs: await elapsed(() =>
       mcp.handle(mcpRequest(1, 'initialize')),
     ),
@@ -94,7 +136,7 @@ try {
     knowledgeCallMs: await elapsed(() =>
       runtime.knowledge.call(
         { name: 'get_entity', input: { entityId: 'Q1' } },
-        { principalId: 'performance' },
+        authorizationContext,
       ),
     ),
   };
@@ -112,4 +154,29 @@ try {
   console.log(JSON.stringify({ ...metrics, uiBytes, uiGzipBytes }));
 } finally {
   await miniflare.dispose();
+}
+
+function opaqueCursorCodec() {
+  const values = new Map();
+  return {
+    currentGeneration: async () => 'performance-generation',
+    async digest(purpose, value) {
+      return createHmac('sha256', 'workshop-performance-cursor-key')
+        .update(purpose)
+        .update('\0')
+        .update(value)
+        .digest('hex');
+    },
+    async seal(generation, plaintext) {
+      const token = `opaque.${generation}.${randomUUID()}`;
+      values.set(token, plaintext.slice());
+      return token;
+    },
+    async open(generation, token) {
+      const value = values.get(token);
+      if (!value || !token.startsWith(`opaque.${generation}.`))
+        throw new Error('invalid cursor');
+      return value.slice();
+    },
+  };
 }

@@ -16,7 +16,8 @@ export interface KnowledgeToolCall {
 export interface KnowledgeService {
   call(
     call: KnowledgeToolCall,
-    context: { principalId: string; requestId?: string },
+    context: AuthorizationContext & { requestId?: string },
   ): Promise<unknown>;
   health?(): Promise<boolean>;
 }
+import type { AuthorizationContext } from '../protocol.js';

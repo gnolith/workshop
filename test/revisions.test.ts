@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWorkshopCore } from '../src/server/context.js';
-import { createTestContext } from './helpers.js';
+import {
+  createTestContext,
+  createTestCursorCodec,
+  createTestKnowledgeOptions,
+  TEST_AUTHORIZATION,
+} from './helpers.js';
 
 const disposers: Array<() => Promise<void>> = [];
 
@@ -13,85 +18,124 @@ describe('monotonic Workshop revisions', () => {
     const { runtime, dispose } = await createTestContext();
     disposers.push(dispose);
 
-    const memory = await runtime.memories.upsert('method', {
-      description: 'Method',
-      content: 'One',
-    });
+    const memory = await runtime.memories.upsert(
+      'method',
+      {
+        description: 'Method',
+        content: 'One',
+      },
+      TEST_AUTHORIZATION,
+    );
     expect(memory.revision).toBe(1);
-    const changedMemory = await runtime.memories.upsert('method', {
-      description: 'Method',
-      content: 'Two',
-      expectedRevision: memory.revision,
-    });
+    const changedMemory = await runtime.memories.upsert(
+      'method',
+      {
+        description: 'Method',
+        content: 'Two',
+        expectedRevision: memory.revision,
+      },
+      TEST_AUTHORIZATION,
+    );
     expect(changedMemory.revision).toBe(2);
 
-    const task = await runtime.tasks.create({
-      description: 'Task',
-      prompt: 'Work',
-    });
+    const task = await runtime.tasks.create(
+      {
+        description: 'Task',
+        prompt: 'Work',
+      },
+      TEST_AUTHORIZATION,
+    );
     expect(task.revision).toBe(1);
-    const claimed = await runtime.tasks.claim(task.id);
+    const claimed = await runtime.tasks.claim(task.id, TEST_AUTHORIZATION);
     expect(claimed.revision).toBe(2);
-    const changed = await runtime.tasks.update(task.id, {
-      expectedRevision: claimed.revision,
-      prompt: 'Changed',
-    });
+    const changed = await runtime.tasks.update(
+      task.id,
+      {
+        expectedRevision: claimed.revision,
+        prompt: 'Changed',
+      },
+      TEST_AUTHORIZATION,
+    );
     expect(changed.revision).toBe(3);
-    const completed = await runtime.tasks.complete(task.id, 'Done');
+    const completed = await runtime.tasks.complete(
+      task.id,
+      'Done',
+      TEST_AUTHORIZATION,
+    );
     expect(completed.revision).toBe(4);
   });
 
   it('makes revision authoritative when both compatibility tokens are supplied', async () => {
     const { runtime, dispose } = await createTestContext();
     disposers.push(dispose);
-    const task = await runtime.tasks.create({
-      description: 'Task',
-      prompt: 'One',
-    });
-    const claimed = await runtime.tasks.claim(task.id);
+    const task = await runtime.tasks.create(
+      {
+        description: 'Task',
+        prompt: 'One',
+      },
+      TEST_AUTHORIZATION,
+    );
+    const claimed = await runtime.tasks.claim(task.id, TEST_AUTHORIZATION);
 
-    const changed = await runtime.tasks.update(task.id, {
-      expectedRevision: claimed.revision,
-      expectedUpdatedAt: task.updatedAt,
-      prompt: 'Two',
-    });
+    const changed = await runtime.tasks.update(
+      task.id,
+      {
+        expectedRevision: claimed.revision,
+        expectedUpdatedAt: task.updatedAt,
+        prompt: 'Two',
+      },
+      TEST_AUTHORIZATION,
+    );
     expect(changed.prompt).toBe('Two');
     await expect(
-      runtime.tasks.update(task.id, {
-        expectedRevision: claimed.revision,
-        expectedUpdatedAt: changed.updatedAt,
-        prompt: 'Stale',
-      }),
+      runtime.tasks.update(
+        task.id,
+        {
+          expectedRevision: claimed.revision,
+          expectedUpdatedAt: changed.updatedAt,
+          prompt: 'Stale',
+        },
+        TEST_AUTHORIZATION,
+      ),
     ).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('keeps legacy timestamp CAS safe when the clock is frozen', async () => {
-    const { db, runtime, dispose } = await createTestContext();
+    const { db, authorization, dispose } = await createTestContext();
     disposers.push(dispose);
     const frozen = new Date('2026-07-20T15:00:00.000Z');
     const core = createWorkshopCore({
       persistence: db,
-      knowledge: runtime.knowledge,
+      authorization,
+      knowledge: createTestKnowledgeOptions(),
+      cursorCodec: createTestCursorCodec(),
+      diamondHealth: async () => true,
       clock: () => frozen,
-      executeSparql: async () => ({
-        type: 'boolean',
-        data: true,
-        truncated: false,
-      }),
     });
-    const task = await core.tasks.create({
-      description: 'Frozen',
-      prompt: 'One',
-    });
+    const task = await core.tasks.create(
+      {
+        description: 'Frozen',
+        prompt: 'One',
+      },
+      TEST_AUTHORIZATION,
+    );
     const outcomes = await Promise.allSettled([
-      core.tasks.update(task.id, {
-        expectedUpdatedAt: task.updatedAt,
-        prompt: 'Two',
-      }),
-      core.tasks.update(task.id, {
-        expectedUpdatedAt: task.updatedAt,
-        prompt: 'Three',
-      }),
+      core.tasks.update(
+        task.id,
+        {
+          expectedUpdatedAt: task.updatedAt,
+          prompt: 'Two',
+        },
+        TEST_AUTHORIZATION,
+      ),
+      core.tasks.update(
+        task.id,
+        {
+          expectedUpdatedAt: task.updatedAt,
+          prompt: 'Three',
+        },
+        TEST_AUTHORIZATION,
+      ),
     ]);
     expect(
       outcomes.filter((outcome) => outcome.status === 'fulfilled'),
@@ -99,34 +143,50 @@ describe('monotonic Workshop revisions', () => {
     expect(
       outcomes.filter((outcome) => outcome.status === 'rejected'),
     ).toHaveLength(1);
-    expect((await core.tasks.get(task.id)).updatedAt).not.toBe(task.updatedAt);
+    expect(
+      (await core.tasks.get(task.id, TEST_AUTHORIZATION)).updatedAt,
+    ).not.toBe(task.updatedAt);
 
-    const next = await core.tasks.create({
-      description: 'Claim',
-      prompt: 'One',
-    });
-    await core.tasks.claim(next.id);
+    const next = await core.tasks.create(
+      {
+        description: 'Claim',
+        prompt: 'One',
+      },
+      TEST_AUTHORIZATION,
+    );
+    await core.tasks.claim(next.id, TEST_AUTHORIZATION);
     await expect(
-      core.tasks.update(next.id, {
-        expectedUpdatedAt: next.updatedAt,
-        prompt: 'Stale pre-claim write',
-      }),
+      core.tasks.update(
+        next.id,
+        {
+          expectedUpdatedAt: next.updatedAt,
+          prompt: 'Stale pre-claim write',
+        },
+        TEST_AUTHORIZATION,
+      ),
     ).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('rejects invalid revisions', async () => {
     const { runtime, dispose } = await createTestContext();
     disposers.push(dispose);
-    const task = await runtime.tasks.create({
-      description: 'Task',
-      prompt: 'One',
-    });
+    const task = await runtime.tasks.create(
+      {
+        description: 'Task',
+        prompt: 'One',
+      },
+      TEST_AUTHORIZATION,
+    );
     for (const expectedRevision of [0, -1, 1.5, Number.MAX_VALUE]) {
       await expect(
-        runtime.tasks.update(task.id, {
-          expectedRevision,
-          prompt: 'Invalid',
-        }),
+        runtime.tasks.update(
+          task.id,
+          {
+            expectedRevision,
+            prompt: 'Invalid',
+          },
+          TEST_AUTHORIZATION,
+        ),
       ).rejects.toMatchObject({ code: 'validation_failed' });
     }
   });

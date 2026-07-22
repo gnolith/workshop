@@ -1,5 +1,10 @@
 # Release checklist
 
+> **Publication is mechanically blocked.** `release:check` and normal
+> `npm publish` fail until `@gnolith/taproot` 0.3 is published, Taproot policy
+> persistence issue #26 is merged, and combined-system acceptance passes. A
+> reviewed follow-up must remove the block; documentation alone cannot waive it.
+
 ## Workshop package handoff
 
 1. Confirm the version, peer ranges, changelog, license, and public exports.
@@ -13,9 +18,9 @@
    compatibility flags.
 7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-8. Commit the final tree and create the annotated `v0.2.3` tag with explicit
+8. Commit the final tree and create the annotated `v0.3.0` tag with explicit
    authorization, then regenerate provenance from that clean tagged checkout.
-9. Run `npm run release:check -- v0.2.3`; it must verify exact archive contents,
+9. Run `npm run release:check -- v0.3.0`; it must verify exact archive contents,
    source identity, version uniqueness, the clean commit/tree, and annotated tag
    without repacking.
 10. Persist the provenance and versioned schema as non-replaceable GitHub
