@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 
 import { verifyTaprootRelease } from '../scripts/release-block.mjs';
+import { assertPublishDryRunBoundary } from '../scripts/prepublish-check.mjs';
 
 const predicateType = 'https://slsa.dev/provenance/v1';
 const sourceCommit = '9b7eb5de694e6020ce8466e01687b8077fbf915c';
@@ -10,6 +11,69 @@ const sha512Bytes = Buffer.alloc(64, 0xab);
 const sha512 = sha512Bytes.toString('hex');
 
 describe('Workshop package release boundary', () => {
+  const head = 'a'.repeat(40);
+  const tag = 'v0.3.3';
+
+  it('accepts a successful dry run only for the annotated tag at HEAD', () => {
+    expect(
+      assertPublishDryRunBoundary({
+        status: 0,
+        output:
+          `@gnolith/taproot 0.3.0 public npm provenance verified\n` +
+          `release artifact validated for ${tag} at ${head} (digest)\n`,
+        tag,
+        head,
+        tagType: 'tag',
+        tagCommit: head,
+      }),
+    ).toBe('tagged');
+  });
+
+  it('accepts an untagged dry-run failure only at the exact missing-tag boundary', () => {
+    expect(
+      assertPublishDryRunBoundary({
+        status: 1,
+        output:
+          '@gnolith/taproot 0.3.0 public npm provenance verified\n' +
+          `fatal: ambiguous argument 'refs/tags/${tag}': unknown revision or path not in the working tree.\n`,
+        tag,
+        head,
+        tagType: null,
+        tagCommit: null,
+      }),
+    ).toBe('untagged');
+    expect(() =>
+      assertPublishDryRunBoundary({
+        status: 1,
+        output: `fatal: refs/tags/${tag} resolves to the wrong commit\n`,
+        tag,
+        head,
+        tagType: 'tag',
+        tagCommit: 'b'.repeat(40),
+      }),
+    ).toThrow(/away from HEAD|not an annotated tag at HEAD/u);
+    expect(() =>
+      assertPublishDryRunBoundary({
+        status: 1,
+        output: `fatal: refs/tags/${tag} is lightweight\n`,
+        tag,
+        head,
+        tagType: 'commit',
+        tagCommit: head,
+      }),
+    ).toThrow(/not an annotated tag at HEAD/u);
+    expect(() =>
+      assertPublishDryRunBoundary({
+        status: 1,
+        output: `fatal: unrelated failure mentioning refs/tags/${tag}\n`,
+        tag,
+        head,
+        tagType: null,
+        tagCommit: null,
+      }),
+    ).toThrow(/exact missing Workshop/u);
+  });
+
   it('binds the exact Taproot package digest and SLSA source identity', async () => {
     await expect(verifyFixture()).resolves.toMatchObject({
       packageName: '@gnolith/taproot',

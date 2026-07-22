@@ -20,16 +20,17 @@
    compatibility flags.
 7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-8. Commit the final tree and create the annotated `v0.3.2` tag with explicit
+8. Commit the final tree and create the annotated `v0.3.3` tag with explicit
    authorization, then regenerate provenance from that clean tagged checkout.
-9. Run `npm run release:check -- v0.3.2`; it must verify exact archive contents,
+9. Run `npm run release:check -- v0.3.3`; it must verify exact archive contents,
    source identity, version uniqueness, the clean commit/tree, and annotated tag
    without repacking. Normal `npm publish` derives this tag from the package
    version and runs both the Taproot provenance gate and the same Workshop
    release check before publication.
-10. Persist the provenance and versioned schema as non-replaceable GitHub
-    Release assets, then publish the verified archive rather than the package
-    directory. Publishing remains separately authorization-gated.
+10. Push the annotated tag. The tag-driven OIDC workflow must repeat package
+    verification, publish the verified archive rather than the package
+    directory, verify exact npm provenance, and only then create the immutable
+    GitHub Release with provenance assets. Do not create the Release manually.
 
 ## Excluded from Workshop release acceptance
 

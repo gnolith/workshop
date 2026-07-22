@@ -17,6 +17,11 @@ assert.equal(
   manifest.scripts.check.match(/npm run release:boundary-check/gu)?.length,
   1,
 );
+assert.equal(manifest.scripts.check.match(/npm run pack:check/gu)?.length, 1);
+assert.ok(
+  manifest.scripts.check.indexOf('npm run pack:check') <
+    manifest.scripts.check.indexOf('npm run release:boundary-check'),
+);
 
 const expectedExports = [
   '.',
@@ -76,6 +81,7 @@ assert.ok(evidence.includes('does not qualify a'));
 assert.ok(evidence.includes('complete Gnolith Site'));
 assert.ok(evidence.includes('machine-verifiable record'));
 assert.ok(evidence.includes('PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE'));
+assert.ok(evidence.includes('PENDING'));
 assert.ok(
   evidence.includes('Workshop CI must not provision, deploy, assemble'),
 );
@@ -84,6 +90,7 @@ assert.ok(
 );
 assert.ok(checklist.includes('security, native SQLite'));
 assert.ok(checklist.includes('Normal `npm publish` derives this tag'));
+assert.ok(checklist.includes('tag-driven OIDC workflow'));
 assert.doesNotMatch(checklist, /combined-system acceptance passes/iu);
 assert.ok(existsSync('docs/release-provenance.schema.json'));
 console.log('repository readiness invariants passed');

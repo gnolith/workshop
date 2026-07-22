@@ -17,6 +17,9 @@ const postpublish = inlineNodeAfter(
   'if (attempt < 12) await delay(5_000);',
   'if (attempt < 12) await delay(0);',
 );
+const releaseAbsence = inlineNodeAfter(
+  'Refuse a preexisting GitHub Release before npm publication',
+);
 const testRoot = await mkdtemp(join(tmpdir(), 'workshop-release-identity-'));
 
 try {
@@ -31,7 +34,18 @@ try {
     run(validator, { ref: 'refs/tags/v9.8.6' }, false);
     run(validator, { commit: 'b'.repeat(40) }, false);
     run(validator, { subjectSha512: 'c'.repeat(128) }, false);
+    run(validator, { omitPayloadType: true }, false);
+    run(validator, { omitSignatures: true }, false);
+    run(validator, { omitStatementType: true }, false);
+    run(validator, { omitBuildType: true }, false);
   }
+  runReleaseAbsence({ status: 404 }, true);
+  runReleaseAbsence({ status: 200 }, false);
+  runReleaseAbsence({ status: 403 }, false);
+  runReleaseAbsence({ status: 503 }, false);
+  runReleaseAbsence({ status: Number.NaN }, false);
+  runReleaseAbsence({ failure: 'timeout' }, false);
+  runReleaseAbsence({ failure: 'network' }, false);
 } finally {
   await rm(testRoot, { recursive: true, force: true });
 }
@@ -55,12 +69,14 @@ const fixtureSha1 = fixtureHash('sha1').update(fixtureBytes).digest('hex');
 const fixtureSha512 = fixtureHash('sha512').update(fixtureBytes).digest('hex');
 const fixtureIntegrity = \`sha512-\${fixtureHash('sha512').update(fixtureBytes).digest('base64')}\`;
 const fixtureStatement = {
+  ${overrides.omitStatementType ? '' : "_type: 'https://in-toto.io/Statement/v1',"}
   predicateType: 'https://slsa.dev/provenance/v1',
   subject: [{
     name: 'pkg:npm/%40gnolith/workshop@9.8.7',
     digest: { sha512: ${subjectDigest} },
   }],
   predicate: { buildDefinition: {
+    ${overrides.omitBuildType ? '' : "buildType: 'https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1',"}
     externalParameters: { workflow: {
       ref: ${JSON.stringify(ref)},
       repository: ${JSON.stringify(repository)},
@@ -75,7 +91,9 @@ const fixtureStatement = {
 const fixtureAttestations = { attestations: [{
   predicateType: 'https://slsa.dev/provenance/v1',
   bundle: { dsseEnvelope: {
+    ${overrides.omitPayloadType ? '' : "payloadType: 'application/vnd.in-toto+json',"}
     payload: Buffer.from(JSON.stringify(fixtureStatement)).toString('base64'),
+    ${overrides.omitSignatures ? '' : "signatures: [{ keyid: '', sig: 'trusted-registry-signature' }],"}
   } },
 }] };
 const fixtureMetadata = {
@@ -130,5 +148,36 @@ function run(validator, overrides, shouldPass) {
     result.status === 0,
     shouldPass,
     `identity case ${JSON.stringify(overrides)} unexpectedly ${result.status === 0 ? 'passed' : `failed: ${result.stderr}`}`,
+  );
+}
+
+function runReleaseAbsence(fixture, shouldPass) {
+  const token = `fixture-token-${randomUUID()}`;
+  const prelude = fixture.failure
+    ? `globalThis.fetch = async () => { throw ${
+        fixture.failure === 'timeout'
+          ? "new DOMException('timed out', 'TimeoutError')"
+          : "new TypeError('network unavailable')"
+      }; };\n`
+    : `globalThis.fetch = async () => ({ status: ${String(fixture.status)}, ok: ${fixture.status >= 200 && fixture.status < 300} });\n`;
+  const result = spawnSync(process.execPath, ['--input-type=module'], {
+    input: prelude + releaseAbsence,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GH_TOKEN: token,
+      GITHUB_REPOSITORY: 'gnolith/workshop',
+      RELEASE_TAG: 'v9.8.7',
+    },
+  });
+  assert.equal(
+    result.status === 0,
+    shouldPass,
+    `Release absence case ${JSON.stringify(fixture)} unexpectedly ${result.status === 0 ? 'passed' : `failed: ${result.stderr}`}`,
+  );
+  assert.doesNotMatch(
+    `${result.stdout}${result.stderr}`,
+    new RegExp(token, 'u'),
+    'Release absence diagnostics leaked the GitHub token',
   );
 }
