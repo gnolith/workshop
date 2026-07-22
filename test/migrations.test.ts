@@ -33,7 +33,7 @@ describe('migration artifact integrity', () => {
     const packageManifest = JSON.parse(
       readFileSync('package.json', 'utf8'),
     ) as { version?: unknown };
-    expect(packageManifest.version).toBe('0.3.1');
+    expect(packageManifest.version).toBe('0.3.2');
     expect(workshopPackage.version).toBe(packageManifest.version);
     expect(
       workshopMigrations

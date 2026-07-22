@@ -5,6 +5,18 @@ import { join } from 'node:path';
 const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
 assert.equal(manifest.private, false);
 assert.notEqual(manifest.version, '0.0.0');
+assert.equal(
+  manifest.repository.url,
+  'git+https://github.com/gnolith/workshop.git',
+);
+assert.equal(
+  manifest.scripts['release:boundary-check'],
+  'node scripts/prepublish-check.mjs --verify-dry-run',
+);
+assert.equal(
+  manifest.scripts.check.match(/npm run release:boundary-check/gu)?.length,
+  1,
+);
 
 const expectedExports = [
   '.',
@@ -56,12 +68,23 @@ assert.deepEqual(migrationIds, [...migrationIds].sort());
 
 const readme = readFileSync('README.md', 'utf8');
 const evidence = readFileSync('docs/release-evidence.md', 'utf8');
+const checklist = readFileSync('docs/release-checklist.md', 'utf8');
 assert.ok(readme.includes('@gnolith/workshop/site'));
 assert.ok(evidence.includes('Workshop package handoff ready'));
 assert.ok(evidence.includes('isolated package-runtime consumers'));
 assert.ok(evidence.includes('does not qualify a'));
 assert.ok(evidence.includes('complete Gnolith Site'));
 assert.ok(evidence.includes('machine-verifiable record'));
+assert.ok(evidence.includes('PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE'));
+assert.ok(
+  evidence.includes('Workshop CI must not provision, deploy, assemble'),
+);
+assert.ok(
+  checklist.includes('public, provenance-verified `@gnolith/taproot` 0.3.0'),
+);
+assert.ok(checklist.includes('security, native SQLite'));
+assert.ok(checklist.includes('Normal `npm publish` derives this tag'));
+assert.doesNotMatch(checklist, /combined-system acceptance passes/iu);
 assert.ok(existsSync('docs/release-provenance.schema.json'));
 console.log('repository readiness invariants passed');
 

@@ -19,7 +19,7 @@ assert.equal(tag, `v${manifest.version}`, 'tag must match package version');
 assert.equal(manifest.private, false, 'Workshop must remain publishable');
 assert.equal(
   manifest.repository.url,
-  'https://github.com/gnolith/workshop.git',
+  'git+https://github.com/gnolith/workshop.git',
 );
 assert.ok(
   readFileSync('CHANGELOG.md', 'utf8').includes(`## [${manifest.version}]`),
