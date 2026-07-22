@@ -29,13 +29,14 @@ jobs:
           npm pack "$RUNNER_TEMP/taproot" --pack-destination "$RUNNER_TEMP"
       - name: Install exact packed peers
         run: |
+          workshop_version="$(node -p "require('./package.json').version")"
           npm pack . --pack-destination "$RUNNER_TEMP"
           mkdir "$RUNNER_TEMP/peer-consumer"
           cd "$RUNNER_TEMP/peer-consumer"
           npm init --yes
           npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund \
             "$RUNNER_TEMP/gnolith-taproot-0.4.0.tgz" \
-            "$RUNNER_TEMP/gnolith-workshop-0.4.0.tgz" \
+            "$RUNNER_TEMP/gnolith-workshop-${workshop_version}.tgz" \
             "@gnolith/diamond@0.4.0" \
             "miniflare@4.20260714.0"
           cp "$GITHUB_WORKSPACE/.github/scripts/taproot-peer-conformance.ts" conformance.ts
