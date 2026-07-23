@@ -128,6 +128,11 @@ export interface TaskRevision {
   createdAt: string;
 }
 
+/** Bounded history reads return newest canonical revisions first. */
+export interface RevisionHistoryOptions {
+  limit?: number;
+}
+
 export interface TaskPacket {
   task: Task;
   context: Array<{

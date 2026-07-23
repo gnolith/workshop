@@ -27,6 +27,11 @@ identity, and host bindings; they verify Workshop package compatibility only
 and perform no remote deployment. They do not assemble or qualify a complete
 Gnolith Site.
 
+The generic exact-package declaration consumer also compiles the required
+Task/Memory history methods on `WorkshopClient` and their process-core service
+signatures, including the shared bounded history options. Its public-version
+mode repeats normal npm resolution after publication.
+
 CI also packs released Taproot 0.4.0 source commit
 `819fe054ebb867e1ca92518bfd3b1aa6c5aa277d` and checks bidirectional structural
 compatibility for authorization contexts and visibility scopes, the real

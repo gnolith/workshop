@@ -80,9 +80,11 @@ const DIRECT_TOOL_NAMES = [
   'archive_task',
   'claim_task',
   'complete_task',
+  'task_history',
   'list_memories',
   'get_memory',
   'upsert_memory',
+  'memory_history',
   'list_prompts',
   'get_prompt',
   'create_prompt',
@@ -245,6 +247,12 @@ async function executeTool(
         input.result,
         principal,
       );
+    case 'task_history':
+      return runtime.tasks.history(text(input.id, 'id'), principal, {
+        ...(input.limit === undefined
+          ? {}
+          : { limit: positive(input.limit, 'limit') }),
+      });
     case 'list_memories':
       return runtime.memories.list(input, principal);
     case 'get_memory':
@@ -257,6 +265,12 @@ async function executeTool(
         principal,
       );
     }
+    case 'memory_history':
+      return runtime.memories.history(text(input.slug, 'slug'), principal, {
+        ...(input.limit === undefined
+          ? {}
+          : { limit: positive(input.limit, 'limit') }),
+      });
     case 'list_prompts':
       return requiredPrompts(runtime).list(input, principal);
     case 'get_prompt':
@@ -278,7 +292,11 @@ async function executeTool(
         principal,
       );
     case 'prompt_history':
-      return requiredPrompts(runtime).history(text(input.id, 'id'), principal);
+      return requiredPrompts(runtime).history(text(input.id, 'id'), principal, {
+        ...(input.limit === undefined
+          ? {}
+          : { limit: positive(input.limit, 'limit') }),
+      });
     case 'search':
       return requiredSearch(runtime).search(input as never, principal);
     case 'search_status': {

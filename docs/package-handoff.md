@@ -6,6 +6,9 @@ This phase is complete when the exact npm tarball passes the local release gate
 and provides the documented protocol, server, MCP, Site route, UI, migration,
 health, and observability surfaces. The package owns runtime
 boundaries, schemas, validation, tests, assets, and consumer compatibility.
+The public process/core and browser-client composition contracts include
+required bounded Task and Memory history operations; hosts only route and
+authenticate those package-owned services.
 
 The downstream Site supplies D1, Diamond health, Taproot persistence and its
 authorized-reader boundary, the shared live authorization source with separate

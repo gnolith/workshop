@@ -132,6 +132,10 @@ the host chooses to initialize or migrate.
 - Task packets resolve authorized current memories on every read. Unscoped
   context-query execution is disabled until the host supplies a scoped graph
   boundary. Packet reads do not claim or mutate tasks.
+- Task, Memory, and Prompt histories are bounded newest-first canonical
+  snapshots. Each snapshot is authorized independently, and the exact current
+  record plus live installation authorization are rechecked immediately before
+  content returns.
 - Knowledge reads use Taproot's authorized-reader boundary. Mutations are
   fail-closed and are not advertised by Workshop's MCP surface.
 - MCP authenticates every request and authorizes every tool server-side.

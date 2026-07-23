@@ -2,7 +2,20 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
-## [0.4.1] - Unreleased
+## [0.4.2] - 2026-07-22
+
+### Added
+
+- Expose bounded `task_history` and `memory_history` reads through the process
+  core, MCP, HTTP/browser client, and packed public composition declarations.
+
+### Security
+
+- Validate canonical revision identity, authorize every historical snapshot,
+  and recheck the exact current record plus live authorization immediately
+  before Task, Memory, or Prompt history content is returned.
+
+## [0.4.1] - 2026-07-22
 
 ### Fixed
 

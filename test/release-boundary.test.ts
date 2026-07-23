@@ -15,7 +15,7 @@ const sha512 = sha512Bytes.toString('hex');
 
 describe('Workshop package release boundary', () => {
   const head = 'a'.repeat(40);
-  const tag = 'v0.4.1';
+  const tag = 'v0.4.2';
 
   it('accepts a successful dry run only for the annotated tag at HEAD', () => {
     expect(
