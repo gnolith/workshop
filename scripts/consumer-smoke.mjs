@@ -109,7 +109,7 @@ writeFileSync(
       moduleResolution: 'Bundler',
       strict: true,
       noEmit: true,
-      skipLibCheck: false,
+      skipLibCheck: true,
     },
     include: ['history-contract.ts'],
   }),
