@@ -6,6 +6,7 @@ import type {
   MemoryRevision,
   UpsertMemoryInput,
 } from '../protocol/memories.js';
+import type { RevisionHistoryOptions } from '../protocol/tasks.js';
 import type { D1DatabaseLike } from './database.js';
 import {
   assertCursorCandidatesBounded,
@@ -692,15 +693,30 @@ export class MemoryService {
   async history(
     slugValue: string,
     authorization: AuthorizationContext,
+    options: RevisionHistoryOptions = {},
   ): Promise<MemoryRevision[]> {
-    const current = await this.get(slugValue, authorization);
+    const context = await this.#context(authorization);
+    const slug = memorySlug(slugValue);
+    const predicate = visibilitySql('workshop_memories', context);
+    const current = await this.db
+      .prepare(
+        `SELECT * FROM workshop_memories WHERE slug = ? AND deleted_at IS NULL AND ${predicate.sql}`,
+      )
+      .bind(slug, ...predicate.values)
+      .first<MemoryRow>();
+    if (!current) throw denied();
+    await this.#recheck(current, context);
+    const limit = pageLimit(
+      options.limit ?? this.#limits.maxPageSize,
+      this.#limits,
+    );
     const rows = await this.db
       .prepare(
         `SELECT memory_id, revision, snapshot_json, actor_principal_id, event_id, created_at
          FROM workshop_memory_revisions
-         WHERE installation_id = ? AND memory_id = ? ORDER BY revision DESC LIMIT 200`,
+         WHERE installation_id = ? AND memory_id = ? ORDER BY revision DESC LIMIT ?`,
       )
-      .bind(current.installationId, current.slug)
+      .bind(context.installationId, current.slug, limit)
       .all<{
         memory_id: string;
         revision: number;
@@ -709,14 +725,27 @@ export class MemoryService {
         event_id: string;
         created_at: string;
       }>();
-    return rows.results.map((row) => ({
-      memoryId: row.memory_id,
-      revision: row.revision,
-      memory: JSON.parse(row.snapshot_json) as Memory,
-      actorPrincipalId: row.actor_principal_id,
-      eventId: row.event_id,
-      createdAt: normalizeSqlDate(row.created_at),
-    }));
+    const revisions = rows.results.map((row, index) => {
+      const memory = parseMemoryRevision(
+        row.snapshot_json,
+        row.memory_id,
+        row.revision,
+      );
+      if (row.revision !== current.revision - index) throw denied();
+      authorizeRecord(memory, context);
+      return {
+        memoryId: row.memory_id,
+        revision: row.revision,
+        memory,
+        actorPrincipalId: row.actor_principal_id,
+        eventId: row.event_id,
+        createdAt: normalizeSqlDate(row.created_at),
+      };
+    });
+    if (revisions.length === 0 || revisions[0]?.revision !== current.revision)
+      throw denied();
+    await this.#recheck(current, context);
+    return revisions;
   }
 
   #search(): WorkshopSearchDomainV1 {
@@ -892,6 +921,31 @@ function toMemory(row: MemoryRow): Memory {
     visibility: authorization.visibility,
     authorizationRevision: authorization.authorizationRevision,
   };
+}
+
+function parseMemoryRevision(
+  snapshot: string,
+  memoryId: string,
+  revision: number,
+): Memory {
+  let value: unknown;
+  try {
+    value = JSON.parse(snapshot);
+  } catch {
+    throw denied();
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw denied();
+  const memory = value as Memory;
+  if (
+    memory.slug !== memoryId ||
+    memory.revision !== revision ||
+    typeof memory.installationId !== 'string' ||
+    !Number.isSafeInteger(memory.authorizationRevision) ||
+    !memory.visibility
+  )
+    throw denied();
+  return memory;
 }
 
 function toAuthorizationRecord(

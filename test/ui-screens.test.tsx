@@ -215,6 +215,7 @@ function mockClient(): WorkshopClient {
         completedAt: now,
         result,
       })),
+      history: vi.fn(async () => []),
     },
     memories: {
       list: vi.fn(async () => ({ items: [memory], cursor: null })),
@@ -226,6 +227,7 @@ function mockClient(): WorkshopClient {
         content: input.content,
         revision: 1,
       })),
+      history: vi.fn(async () => []),
     },
   };
 }

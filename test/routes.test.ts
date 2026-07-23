@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createMemoryHandler,
+  createMemoryHistoryHandler,
   createTaskClaimHandler,
+  createTaskHistoryHandler,
   createTasksHandler,
   createWorkshopHealthHandler,
   createWorkshopProbeHandler,
@@ -132,5 +134,76 @@ describe('Web route factories', () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.not.toHaveProperty('tables');
+  });
+
+  it('exposes bounded authorized Task and Memory history routes', async () => {
+    const value = await runtime();
+    const task = await value.tasks.create(
+      { description: 'Route history', prompt: 'First' },
+      {
+        ...(await value.resolvePrincipal(
+          request('https://site.test/api/workshop/tasks', 'GET', 'writer'),
+        ))!,
+      },
+    );
+    await value.tasks.update(
+      task.id,
+      { expectedRevision: task.revision, prompt: 'Second' },
+      (await value.resolvePrincipal(
+        request('https://site.test/api/workshop/tasks', 'GET', 'writer'),
+      ))!,
+    );
+    const memory = await value.memories.upsert(
+      'route-history',
+      { description: 'Route history', content: 'First' },
+      (await value.resolvePrincipal(
+        request('https://site.test/api/workshop/memories', 'GET', 'writer'),
+      ))!,
+    );
+    await value.memories.upsert(
+      memory.slug,
+      {
+        description: memory.description,
+        content: 'Second',
+        expectedRevision: memory.revision,
+      },
+      (await value.resolvePrincipal(
+        request('https://site.test/api/workshop/memories', 'GET', 'writer'),
+      ))!,
+    );
+    const taskHistory = createTaskHistoryHandler(value);
+    const memoryHistory = createMemoryHistoryHandler(value);
+
+    expect(
+      (
+        await taskHistory(
+          request(
+            `https://site.test/api/workshop/tasks/${task.id}/history?limit=1`,
+          ),
+        )
+      ).status,
+    ).toBe(401);
+    await expect(
+      (
+        await taskHistory(
+          request(
+            `https://site.test/api/workshop/tasks/${task.id}/history?limit=1`,
+            'GET',
+            'reader',
+          ),
+        )
+      ).json(),
+    ).resolves.toMatchObject([{ taskId: task.id, revision: 2 }]);
+    await expect(
+      (
+        await memoryHistory(
+          request(
+            `https://site.test/api/workshop/memories/${memory.slug}/history?limit=1`,
+            'GET',
+            'reader',
+          ),
+        )
+      ).json(),
+    ).resolves.toMatchObject([{ memoryId: memory.slug, revision: 2 }]);
   });
 });

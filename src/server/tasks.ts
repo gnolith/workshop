@@ -9,6 +9,7 @@ import type {
   TaskOutcomeKind,
   TaskRelationship,
   TaskRevision,
+  RevisionHistoryOptions,
   UpdateTaskInput,
 } from '../protocol/tasks.js';
 import {
@@ -867,15 +868,23 @@ export class TaskService {
   async history(
     id: string,
     authorization: AuthorizationContext,
+    options: RevisionHistoryOptions = {},
   ): Promise<TaskRevision[]> {
-    const current = await this.get(id, authorization);
+    const context = await this.#context(authorization);
+    const current = await this.#getRow(id, context);
+    if (!current) throw denied();
+    await this.#recheck(current, context);
+    const limit = pageLimit(
+      options.limit ?? this.#limits.maxPageSize,
+      this.#limits,
+    );
     const rows = await this.db
       .prepare(
         `SELECT task_id, revision, snapshot_json, actor_principal_id, event_id, created_at
          FROM workshop_task_revisions WHERE task_id = ?
-         ORDER BY revision DESC LIMIT 200`,
+         ORDER BY revision DESC LIMIT ?`,
       )
-      .bind(current.id)
+      .bind(current.id, limit)
       .all<{
         task_id: string;
         revision: number;
@@ -884,14 +893,27 @@ export class TaskService {
         event_id: string;
         created_at: string;
       }>();
-    return rows.results.map((row) => ({
-      taskId: row.task_id,
-      revision: row.revision,
-      task: JSON.parse(row.snapshot_json) as Task,
-      actorPrincipalId: row.actor_principal_id,
-      eventId: row.event_id,
-      createdAt: normalizeDate(row.created_at),
-    }));
+    const revisions = rows.results.map((row, index) => {
+      const task = parseTaskRevision(
+        row.snapshot_json,
+        row.task_id,
+        row.revision,
+      );
+      if (row.revision !== current.revision - index) throw denied();
+      authorizeRecord(task, context);
+      return {
+        taskId: row.task_id,
+        revision: row.revision,
+        task,
+        actorPrincipalId: row.actor_principal_id,
+        eventId: row.event_id,
+        createdAt: normalizeDate(row.created_at),
+      };
+    });
+    if (revisions.length === 0 || revisions[0]?.revision !== current.revision)
+      throw denied();
+    await this.#recheck(current, context);
+    return revisions;
   }
 
   async #predecessor(
@@ -1292,6 +1314,31 @@ function toTask(row: TaskRow): Task {
     visibility: authorization.visibility,
     authorizationRevision: authorization.authorizationRevision,
   };
+}
+
+function parseTaskRevision(
+  snapshot: string,
+  taskId: string,
+  revision: number,
+): Task {
+  let value: unknown;
+  try {
+    value = JSON.parse(snapshot);
+  } catch {
+    throw denied();
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw denied();
+  const task = value as Task;
+  if (
+    task.id !== taskId ||
+    task.revision !== revision ||
+    typeof task.installationId !== 'string' ||
+    !Number.isSafeInteger(task.authorizationRevision) ||
+    !task.visibility
+  )
+    throw denied();
+  return task;
 }
 
 function toAuthorizationRecord(

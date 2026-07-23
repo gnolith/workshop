@@ -10,6 +10,7 @@ import type {
   TaskFilters,
   TaskPacket,
   TaskPage,
+  RevisionHistoryOptions,
   UpdateTaskInput,
 } from './tasks.js';
 import type { Memory } from './memories.js';
@@ -34,6 +35,9 @@ export interface WorkshopClientOptions {
 export interface RequestOptions {
   signal?: AbortSignal;
 }
+
+export interface HistoryRequestOptions
+  extends RequestOptions, RevisionHistoryOptions {}
 
 interface WorkshopRequestInit extends Omit<RequestInit, 'signal'> {
   signal?: AbortSignal | undefined;
@@ -62,7 +66,10 @@ export interface WorkshopClient {
       result: string,
       options?: RequestOptions,
     ): Promise<Task>;
-    history?: (id: string, options?: RequestOptions) => Promise<TaskRevision[]>;
+    history(
+      id: string,
+      options?: HistoryRequestOptions,
+    ): Promise<TaskRevision[]>;
   };
   memories: {
     list(
@@ -80,10 +87,10 @@ export interface WorkshopClient {
       expectedRevision: number,
       options?: RequestOptions,
     ) => Promise<void>;
-    history?: (
+    history(
       slug: string,
-      options?: RequestOptions,
-    ) => Promise<MemoryRevision[]>;
+      options?: HistoryRequestOptions,
+    ): Promise<MemoryRevision[]>;
   };
   prompts?: {
     list(
@@ -102,7 +109,10 @@ export interface WorkshopClient {
       expectedRevision: number,
       options?: RequestOptions,
     ): Promise<void>;
-    history(id: string, options?: RequestOptions): Promise<PromptRevision[]>;
+    history(
+      id: string,
+      options?: HistoryRequestOptions,
+    ): Promise<PromptRevision[]>;
   };
   search?: (
     request: SearchRequest,
@@ -222,9 +232,12 @@ export function createWorkshopClient(
           signal: requestOptions?.signal,
         }),
       history: (id, requestOptions) =>
-        request(`/api/workshop/tasks/${encodeURIComponent(id)}/history`, {
-          signal: requestOptions?.signal,
-        }),
+        request(
+          `/api/workshop/tasks/${encodeURIComponent(id)}/history${query({ limit: requestOptions?.limit })}`,
+          {
+            signal: requestOptions?.signal,
+          },
+        ),
     },
     memories: {
       list: (filters, requestOptions) =>
@@ -248,9 +261,12 @@ export function createWorkshopClient(
           signal: requestOptions?.signal,
         }),
       history: (slug, requestOptions) =>
-        request(`/api/workshop/memories/${encodeURIComponent(slug)}/history`, {
-          signal: requestOptions?.signal,
-        }),
+        request(
+          `/api/workshop/memories/${encodeURIComponent(slug)}/history${query({ limit: requestOptions?.limit })}`,
+          {
+            signal: requestOptions?.signal,
+          },
+        ),
     },
     prompts: {
       list: (filters, requestOptions) =>
@@ -280,9 +296,12 @@ export function createWorkshopClient(
           signal: requestOptions?.signal,
         }),
       history: (id, requestOptions) =>
-        request(`/api/workshop/prompts/${encodeURIComponent(id)}/history`, {
-          signal: requestOptions?.signal,
-        }),
+        request(
+          `/api/workshop/prompts/${encodeURIComponent(id)}/history${query({ limit: requestOptions?.limit })}`,
+          {
+            signal: requestOptions?.signal,
+          },
+        ),
     },
     search: (searchRequest, requestOptions) =>
       request('/api/workshop/search', {

@@ -20,9 +20,9 @@
    compatibility flags.
 7. Audit MCP tool descriptions/schemas, browser/server dependency boundaries,
    health/telemetry safety, documentation, and package contents.
-8. Commit the final tree and create the annotated `v0.4.1` tag with explicit
+8. Commit the final tree and create the annotated `v0.4.2` tag with explicit
    authorization, then regenerate provenance from that clean tagged checkout.
-9. Run `npm run release:check -- v0.4.1`; it must verify exact archive contents,
+9. Run `npm run release:check -- v0.4.2`; it must verify exact archive contents,
    source identity, version uniqueness, the clean commit/tree, and annotated tag
    without repacking. Normal `npm publish` derives this tag from the package
    version and runs both the Taproot provenance gate and the same Workshop

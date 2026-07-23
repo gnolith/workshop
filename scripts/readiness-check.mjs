@@ -77,6 +77,7 @@ const evidence = readFileSync('docs/release-evidence.md', 'utf8');
 const checklist = readFileSync('docs/release-checklist.md', 'utf8');
 const compatibility = readFileSync('COMPATIBILITY.md', 'utf8');
 assert.ok(readme.includes('@gnolith/workshop/site'));
+assert.ok(readme.includes('histories are bounded newest-first canonical'));
 assert.ok(evidence.includes('Workshop package handoff ready'));
 assert.ok(evidence.includes('isolated package-runtime consumers'));
 assert.ok(evidence.includes('does not qualify a'));
@@ -95,6 +96,10 @@ assert.ok(checklist.includes('Normal `npm publish` derives this tag'));
 assert.ok(checklist.includes('tag-driven OIDC workflow'));
 assert.ok(compatibility.includes('Waystone plugin contract `>=0.1.0 <0.3.0`'));
 assert.ok(compatibility.includes('WorkshopCompatibleWaystonePlugin'));
+assert.ok(
+  compatibility.includes('required\nTask/Memory history methods') ||
+    compatibility.includes('required Task/Memory history methods'),
+);
 assert.doesNotMatch(checklist, /combined-system acceptance passes/iu);
 assert.ok(existsSync('docs/release-provenance.schema.json'));
 console.log('repository readiness invariants passed');

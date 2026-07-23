@@ -29,3 +29,9 @@ callback, `AbortSignal`, and typed `WorkshopError`. It imports no server module
 and accesses no browser global until the client is constructed. The typed
 `tasks.archive(id, revisionOrUpdatedAt)` supplies the matching revision header
 automatically.
+
+`tasks.history(id, { limit })`, `memories.history(slug, { limit })`, and
+`prompts.history(id, { limit })` are required public client operations. Their
+GET routes accept the same optional positive `limit` query parameter, bounded
+by Workshop's configured maximum page size, and return newest-first revision
+arrays with live authorization rechecked immediately before response creation.

@@ -93,5 +93,9 @@ describe('protocol and validation', () => {
     expect(
       new Headers(captured?.init?.headers).get('x-workshop-revision'),
     ).toBe('1');
+    await client.tasks.history(base.id, { limit: 7 });
+    expect(captured?.input).toBe(
+      'https://site.example/api/workshop/tasks/1/history?limit=7',
+    );
   });
 });

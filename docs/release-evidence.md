@@ -1,10 +1,10 @@
-# Workshop 0.4.1 release evidence
+# Workshop 0.4.2 release evidence
 
 ## Workshop package handoff ready
 
 Current local package decision: **PACKAGE GATES PASS; TAGGED RELEASE EVIDENCE
 PENDING**.
-Workshop 0.4.1 requires public `@gnolith/taproot` 0.4.0 with exact npm
+Workshop 0.4.2 requires public `@gnolith/taproot` 0.4.0 with exact npm
 integrity `sha512-yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==`
 and npm SLSA provenance resolving annotated `v0.4.0` to source commit
 `819fe054ebb867e1ca92518bfd3b1aa6c5aa277d`. A clean matching
@@ -30,7 +30,7 @@ checkout and runs the same format command after `npm ci`.
 
 | Package-owned gate                             | Evidence                                                                      | Status           |
 | ---------------------------------------------- | ----------------------------------------------------------------------------- | ---------------- |
-| Format, lint, strict types, tests, coverage    | 119 tests; source 88.33% statements / 82.35% branches / 91.30% functions      | PASS             |
+| Format, lint, strict types, tests, coverage    | Full current `npm run check`; exact totals recorded by the command            | PASS             |
 | D1 migration, schema, task/memory/prompt races | Miniflare clean-schema and integration tests                                  | PASS             |
 | Embedded SQLite parity                         | Exact Diamond/Workshop tarballs; reopen, migrations, health, contention       | PASS             |
 | Released Taproot runtime boundary              | Exact 819fe packed peer; Task/Memory/Prompt typed and runtime lanes           | PASS             |
@@ -58,7 +58,7 @@ publish workflow retains the provenance and versioned schema as non-replaceable
 GitHub Release assets.
 
 Final performance and artifact measurements must be copied from the clean,
-tagged 0.4.1 gate. Historical measurements are not release evidence for this
+tagged 0.4.2 gate. Historical measurements are not release evidence for this
 version.
 
 ## Evidence boundary

@@ -15,15 +15,24 @@ sessions.
 legacy exact current `expectedUpdatedAt`
 timestamp. This makes concurrent complete/archive transitions deterministic.
 
+`task_history` requires exact `read`, accepts an optional bounded `limit`, and
+returns newest-first canonical revisions only after authorizing every snapshot
+and rechecking the exact current Task and live authorization state.
+
 ## Memories
 
 `list_memories`, `get_memory`, `upsert_memory`, `delete_memory`,
 `memory_history`.
 
+`memory_history` has the same bounded newest-first, per-snapshot authorization,
+canonical-identity, and final current-record recheck guarantees as Task history.
+
 ## Prompts and unified search
 
 `list_prompts`, `get_prompt`, `create_prompt`, `update_prompt`, `delete_prompt`,
 `prompt_history`, `search`, `search_status`, `search_admin`.
+
+`prompt_history` uses the same hardened history read boundary.
 
 Prompt, Memory, and Task writes are sealed atomically with their canonical
 Taproot source events. `search` uses Taproot's authorization-aware result and

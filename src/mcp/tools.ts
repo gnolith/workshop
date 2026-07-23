@@ -176,6 +176,17 @@ const taskTools = [
     { id: string('Task ID.'), result: string('Nonempty task outcome.') },
     ['id', 'result'],
   ),
+  tool(
+    'task_history',
+    'Task history',
+    'Read bounded newest-first canonical task revision history with current authorization rechecked before content is returned.',
+    'read',
+    {
+      id: string('Task ID.'),
+      limit: positiveInteger('Maximum revisions to return.'),
+    },
+    ['id'],
+  ),
 ];
 
 const memoryTools = [
@@ -213,6 +224,17 @@ const memoryTools = [
       expectedUpdatedAt: string('Optional optimistic concurrency timestamp.'),
     },
     ['slug', 'description', 'content'],
+  ),
+  tool(
+    'memory_history',
+    'Memory history',
+    'Read bounded newest-first canonical memory revision history with current authorization rechecked before content is returned.',
+    'read',
+    {
+      slug: string('Memory slug.'),
+      limit: positiveInteger('Maximum revisions to return.'),
+    },
+    ['slug'],
   ),
 ];
 
@@ -296,10 +318,11 @@ const promptTools = [
   tool(
     'prompt_history',
     'Prompt history',
-    'Read bounded canonical prompt revision history.',
+    'Read bounded newest-first canonical prompt revision history with current authorization rechecked before content is returned.',
     'read',
     {
       id: string('Prompt ID.'),
+      limit: positiveInteger('Maximum revisions to return.'),
     },
     ['id'],
   ),

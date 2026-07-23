@@ -16,7 +16,10 @@ if (!npmCli) throw new Error('consumer:check must be run through npm');
 const projectRoot = process.cwd();
 const root = mkdtempSync(join(tmpdir(), 'workshop-consumer-'));
 const source = JSON.parse(readFileSync('package.json', 'utf8'));
-const { archive } = await loadAndVerifyArtifact();
+const publicVersion = process.env.WORKSHOP_PUBLIC_CONSUMER_VERSION;
+const installTarget = publicVersion
+  ? `@gnolith/workshop@${publicVersion}`
+  : (await loadAndVerifyArtifact()).archive;
 writeFileSync(
   join(root, 'package.json'),
   JSON.stringify({
@@ -34,6 +37,7 @@ writeFileSync(
       vite: '8.1.5',
       wrangler: '4.112.0',
       entities: '4.5.0',
+      typescript: '5.9.3',
     },
   }),
 );
@@ -47,7 +51,7 @@ execFileSync(
     '--no-fund',
     '--prefix',
     root,
-    archive,
+    installTarget,
   ],
   { stdio: 'inherit' },
 );
@@ -73,6 +77,48 @@ execFileSync(process.execPath, [join(root, 'smoke.mjs')], {
   cwd: root,
   stdio: 'inherit',
 });
+writeFileSync(
+  join(root, 'history-contract.ts'),
+  `
+    import type {
+      HistoryRequestOptions,
+      MemoryRevision,
+      TaskRevision,
+      WorkshopClient,
+    } from '@gnolith/workshop/protocol';
+    import type { MemoryService, TaskService } from '@gnolith/workshop/server';
+
+    declare const client: WorkshopClient;
+    declare const tasks: TaskService;
+    declare const memories: MemoryService;
+    declare const authorization: Parameters<TaskService['history']>[1];
+    const bounded: HistoryRequestOptions = { limit: 10 };
+    const taskHistory: Promise<TaskRevision[]> = client.tasks.history('task-id', bounded);
+    const memoryHistory: Promise<MemoryRevision[]> = client.memories.history('memory-slug', bounded);
+    const coreTaskHistory: Promise<TaskRevision[]> = tasks.history('task-id', authorization, bounded);
+    const coreMemoryHistory: Promise<MemoryRevision[]> = memories.history('memory-slug', authorization, bounded);
+    void [taskHistory, memoryHistory, coreTaskHistory, coreMemoryHistory];
+  `,
+);
+writeFileSync(
+  join(root, 'tsconfig.json'),
+  JSON.stringify({
+    compilerOptions: {
+      target: 'ES2022',
+      module: 'ESNext',
+      moduleResolution: 'Bundler',
+      strict: true,
+      noEmit: true,
+      skipLibCheck: false,
+    },
+    include: ['history-contract.ts'],
+  }),
+);
+execFileSync(
+  process.execPath,
+  [join(root, 'node_modules', 'typescript', 'bin', 'tsc')],
+  { cwd: root, stdio: 'inherit' },
+);
 const packageRoot = join(root, 'node_modules', ...source.name.split('/'));
 for (const path of [
   'dist/index.d.ts',
@@ -166,7 +212,7 @@ execFileSync(
     '--no-fund',
     '--prefix',
     frontendRoot,
-    archive,
+    installTarget,
   ],
   { stdio: 'inherit' },
 );
@@ -246,5 +292,5 @@ if (!existsSync(join(frontendRoot, 'dist'))) {
   throw new Error('Isolated vinext exact-tarball consumer did not build');
 }
 console.log(
-  `generic, Worker, and vinext isolated package consumers passed for ${source.name}@${source.version}`,
+  `generic declaration/runtime, Worker, and vinext isolated package consumers passed for ${source.name}@${publicVersion ?? source.version}`,
 );

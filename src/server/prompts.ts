@@ -7,6 +7,7 @@ import type {
   PromptRevision,
   UpdatePromptInput,
 } from '../protocol/prompts.js';
+import type { RevisionHistoryOptions } from '../protocol/tasks.js';
 import { WorkshopError } from '../protocol/errors.js';
 import type { D1DatabaseLike } from './database.js';
 import type { WorkshopLimits } from './limits.js';
@@ -517,24 +518,45 @@ export class PromptService {
   async history(
     id: string,
     authorization: AuthorizationContext,
+    options: RevisionHistoryOptions = {},
   ): Promise<PromptRevision[]> {
-    const current = await this.get(id, authorization);
+    const context = await this.#context(authorization);
+    const current = await this.#row(id, context);
+    if (!current) throw denied();
+    await this.#recheck(current, context);
+    const limit = pageLimit(
+      options.limit ?? this.#limits.maxPageSize,
+      this.#limits,
+    );
     const rows = await this.db
       .prepare(
         `SELECT * FROM workshop_prompt_revisions
          WHERE installation_id = ? AND prompt_id = ?
-         ORDER BY revision DESC LIMIT 200`,
+         ORDER BY revision DESC LIMIT ?`,
       )
-      .bind(current.installationId, id)
+      .bind(context.installationId, current.id, limit)
       .all<PromptRevisionRow>();
-    return rows.results.map((row) => ({
-      promptId: row.prompt_id,
-      revision: row.revision,
-      prompt: JSON.parse(row.snapshot_json) as Prompt,
-      actorPrincipalId: row.actor_principal_id,
-      eventId: row.event_id,
-      createdAt: normalizeDate(row.created_at),
-    }));
+    const revisions = rows.results.map((row, index) => {
+      const prompt = parsePromptRevision(
+        row.snapshot_json,
+        row.prompt_id,
+        row.revision,
+      );
+      if (row.revision !== current.revision - index) throw denied();
+      authorizeRecord(prompt, context);
+      return {
+        promptId: row.prompt_id,
+        revision: row.revision,
+        prompt,
+        actorPrincipalId: row.actor_principal_id,
+        eventId: row.event_id,
+        createdAt: normalizeDate(row.created_at),
+      };
+    });
+    if (revisions.length === 0 || revisions[0]?.revision !== current.revision)
+      throw denied();
+    await this.#recheck(current, context);
+    return revisions;
   }
 
   async #sequence(
@@ -716,6 +738,31 @@ function toPrompt(row: PromptRow): Prompt {
       ? { deactivatedAt: normalizeDate(row.deactivated_at) }
       : {}),
   };
+}
+
+function parsePromptRevision(
+  snapshot: string,
+  promptId: string,
+  revision: number,
+): Prompt {
+  let value: unknown;
+  try {
+    value = JSON.parse(snapshot);
+  } catch {
+    throw denied();
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw denied();
+  const prompt = value as Prompt;
+  if (
+    prompt.id !== promptId ||
+    prompt.revision !== revision ||
+    typeof prompt.installationId !== 'string' ||
+    !Number.isSafeInteger(prompt.authorizationRevision) ||
+    !prompt.visibility
+  )
+    throw denied();
+  return prompt;
 }
 
 function object(

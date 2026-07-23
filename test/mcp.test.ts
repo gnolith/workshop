@@ -21,8 +21,8 @@ async function createServerContext() {
 describe('Streamable HTTP MCP', () => {
   it('ships the complete deterministic tool schema surface', async () => {
     const { server } = await createServerContext();
-    expect(server.tools).toHaveLength(24);
-    expect(new Set(server.tools.map((tool) => tool.name)).size).toBe(24);
+    expect(server.tools).toHaveLength(26);
+    expect(new Set(server.tools.map((tool) => tool.name)).size).toBe(26);
     for (const tool of server.tools) {
       expect(tool.title.trim()).not.toBe('');
       expect(tool.description.trim()).not.toBe('');

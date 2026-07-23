@@ -62,8 +62,8 @@ async function setup() {
 describe('transport-neutral Workshop tool dispatcher', () => {
   it('has a complete deterministic registry and filters it by capability', async () => {
     const { dispatcher } = await setup();
-    expect(dispatcher.tools).toHaveLength(24);
-    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(24);
+    expect(dispatcher.tools).toHaveLength(26);
+    expect(new Set(dispatcher.tools.map((tool) => tool.name)).size).toBe(26);
     expect(dispatcher.tools.map(({ name }) => name)).not.toEqual(
       expect.arrayContaining([
         'validate_sparql',
@@ -85,6 +85,8 @@ describe('transport-neutral Workshop tool dispatcher', () => {
     if (readable.ok) {
       const names = readable.value.map((tool) => tool.name);
       expect(names).toContain('list_tasks');
+      expect(names).toContain('task_history');
+      expect(names).toContain('memory_history');
       expect(names).not.toContain('create_task');
     }
 
@@ -97,7 +99,7 @@ describe('transport-neutral Workshop tool dispatcher', () => {
     const fullyAuthorized = dispatcher.listTools(fullyAuthorizedAdmin);
     expect(fullyAuthorized.ok).toBe(true);
     if (fullyAuthorized.ok) {
-      expect(fullyAuthorized.value).toHaveLength(24);
+      expect(fullyAuthorized.value).toHaveLength(26);
     }
 
     const readableAdministrative = dispatcher.listTools(readableAdmin);
@@ -168,6 +170,55 @@ describe('transport-neutral Workshop tool dispatcher', () => {
     expect(result).toMatchObject({
       ok: true,
       value: { id: expect.any(String), description: 'Process-local task' },
+    });
+  });
+
+  it('dispatches bounded task and memory history as explicit read tools', async () => {
+    const { dispatcher, runtime } = await setup();
+    const task = await runtime.tasks.create(
+      { description: 'History task', prompt: 'Keep revisions' },
+      writer,
+    );
+    await runtime.tasks.update(
+      task.id,
+      { expectedRevision: task.revision, prompt: 'Second revision' },
+      writer,
+    );
+    const memory = await runtime.memories.upsert(
+      'history-memory',
+      { description: 'History memory', content: 'First revision' },
+      writer,
+    );
+    await runtime.memories.upsert(
+      memory.slug,
+      {
+        description: memory.description,
+        content: 'Second revision',
+        expectedRevision: memory.revision,
+      },
+      writer,
+    );
+
+    await expect(
+      dispatcher.callTool(
+        { name: 'task_history', arguments: { id: task.id, limit: 1 } },
+        dispatchContext(reader),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: [{ taskId: task.id, revision: 2 }],
+    });
+    await expect(
+      dispatcher.callTool(
+        {
+          name: 'memory_history',
+          arguments: { slug: memory.slug, limit: 1 },
+        },
+        dispatchContext(reader),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: [{ memoryId: memory.slug, revision: 2 }],
     });
   });
 

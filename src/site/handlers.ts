@@ -86,9 +86,11 @@ export function createTaskHistoryHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     only(request, 'GET');
+    const limit = queryLimit(request);
     return runtime.tasks.history(
       pathValue(request, 'tasks'),
       authorize(principal, 'read'),
+      limit === undefined ? {} : { limit },
     );
   });
 }
@@ -162,9 +164,11 @@ export function createMemoryHistoryHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     only(request, 'GET');
+    const limit = queryLimit(request);
     return runtime.memories.history(
       pathValue(request, 'memories'),
       authorize(principal, 'read'),
+      limit === undefined ? {} : { limit },
     );
   });
 }
@@ -216,9 +220,11 @@ export function createPromptHistoryHandler(
 ): WorkshopRouteHandler {
   return route(runtime, async (request, principal) => {
     only(request, 'GET');
+    const limit = queryLimit(request);
     return requiredPrompts(runtime).history(
       pathValue(request, 'prompts'),
       authorize(principal, 'read'),
+      limit === undefined ? {} : { limit },
     );
   });
 }
@@ -461,6 +467,11 @@ async function json(
 
 function queryObject(request: Request): Record<string, string> {
   return Object.fromEntries(new URL(request.url).searchParams);
+}
+
+function queryLimit(request: Request): number | undefined {
+  const value = new URL(request.url).searchParams.get('limit');
+  return value === null ? undefined : Number(value);
 }
 
 function pathValue(request: Request, segment: string): string {
