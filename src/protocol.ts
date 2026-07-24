@@ -22,6 +22,11 @@ export interface AuthenticatedPrincipal {
   installationId: string;
   principalId: string;
   activeWorkspaceId: string | null;
+  /**
+   * Populated only after Taproot's live authorization recheck. Transport
+   * authentication alone does not establish workspace membership.
+   */
+  workspaceIds?: readonly string[];
   capabilities: readonly string[];
   authorizationRevision: number;
   credentialId: string;

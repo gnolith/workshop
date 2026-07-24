@@ -687,6 +687,7 @@ export class TaskService {
     options: {
       expectedRevision?: number;
       expectedUpdatedAt?: string;
+      leaseToken?: unknown;
     },
     authorization: AuthorizationContext,
   ): Promise<Task> {
@@ -695,6 +696,32 @@ export class TaskService {
     const predicate = visibilitySql('workshop_tasks', context);
     const expected = revisionPrecondition(options);
     const now = this.#clock().toISOString();
+    let leaseTokenDigest: string | null = null;
+    if (options.leaseToken !== undefined) {
+      const leaseToken = requiredText(options.leaseToken, 'leaseToken', 4096);
+      const tokenBytes = decodeLeaseToken(leaseToken);
+      leaseTokenDigest = await digestLeaseToken(tokenBytes);
+      tokenBytes.fill(0);
+    }
+    if (leaseTokenDigest !== null && !context.capabilities.includes('admin')) {
+      const ownedLease = await this.db
+        .prepare(
+          `SELECT lease_id FROM workshop_tasks
+           WHERE installation_id = ? AND id = ?
+             AND lease_token_digest = ? AND lease_owner_principal_id = ?
+             AND lease_expires_at > ?`,
+        )
+        .bind(
+          context.installationId,
+          id,
+          leaseTokenDigest,
+          context.principalId,
+          now,
+        )
+        .first<{ lease_id: string }>();
+      if (!ownedLease)
+        throw new WorkshopError('conflict', 'Task lease is not owned', 409);
+    }
     return this.#mutation('task.archive', context.principalId, id, async () => {
       const eventId = crypto.randomUUID();
       const next: Task = {
@@ -712,10 +739,20 @@ export class TaskService {
         await this.#predecessor(id, context),
         {
           sql: `UPDATE workshop_tasks SET archived_at = ?, claimed = 0, claimed_at = NULL,
+             lease_id = NULL, lease_token_digest = NULL,
+             lease_owner_principal_id = NULL, lease_expires_at = NULL,
              revision = ?, authorization_revision = ?, updated_at = ?,
              search_event_id = ?, search_event_sequence = NULL
            WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
-             AND (claimed = 0 OR ? = 1) AND ${predicate.sql} RETURNING *`,
+             AND (
+               ? = 1
+               OR (claimed = 0 AND ? IS NULL)
+               OR (
+                 lease_token_digest = ? AND lease_owner_principal_id = ?
+                 AND lease_expires_at > ?
+               )
+             )
+             AND ${predicate.sql} RETURNING *`,
           values: [
             next.archivedAt,
             next.revision,
@@ -725,6 +762,10 @@ export class TaskService {
             id,
             expected.value,
             context.capabilities.includes('admin') ? 1 : 0,
+            leaseTokenDigest,
+            leaseTokenDigest,
+            context.principalId,
+            now,
             ...predicate.values,
           ],
         },
@@ -1445,7 +1486,11 @@ export class TaskService {
           {
             sql: `INSERT INTO workshop_task_revisions
               (task_id, revision, snapshot_json, actor_principal_id, event_id, created_at)
-              VALUES (?, ?, ?, ?, ?, ?)`,
+              SELECT ?, ?, ?, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM workshop_tasks
+                WHERE id = ? AND revision = ? AND search_event_id = ?
+              )`,
             values: [
               next.id,
               next.revision,
@@ -1453,6 +1498,9 @@ export class TaskService {
               context.principalId,
               eventId,
               next.updatedAt,
+              next.id,
+              next.revision,
+              eventId,
             ],
           },
           ...additionalStatements,

@@ -165,7 +165,7 @@ describe('architecture reset contract', () => {
     const api = createWorkshopBackupApi({
       owner,
       ledger,
-      schemaVersion: 8,
+      schemaVersion: 9,
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
     });
     const backup = await api.exportBackup('installation:test');
@@ -181,7 +181,7 @@ describe('architecture reset contract', () => {
       createWorkshopBackupApi({
         owner,
         ledger: { ...ledger, connectionId: 'forged' },
-        schemaVersion: 8,
+        schemaVersion: 9,
       }),
     ).toThrow(/binding/u);
   });
@@ -204,7 +204,7 @@ describe('architecture reset contract', () => {
             baseIri: 'https://example.invalid/',
             migrations: {
               namespace: '@gnolith/workshop' as const,
-              version: 8,
+              version: 9,
               ready: true,
             },
             compatibility: { diamond: true, taproot: true },
@@ -248,7 +248,7 @@ describe('architecture reset contract', () => {
     ).resolves.toMatchObject({
       installationId: principal.installationId,
       principalId: principal.principalId,
-      migrationReadiness: { version: 8, ready: true },
+      migrationReadiness: { version: 9, ready: true },
       semanticState: { state: 'ready', configured: true },
       versions: { server: '0.5.0', operationSchema: 1 },
       operationCatalogDigest: CATALOG_DIGEST,

@@ -108,4 +108,58 @@ describe('task leases', () => {
       context.runtime.tasks.completeLease(completionInput, TEST_AUTHORIZATION),
     ).resolves.toEqual(completed);
   });
+
+  it('requires the live owner token to archive a leased task', async () => {
+    const context = await createTestContext();
+    disposals.push(context.dispose);
+    const writer = {
+      ...TEST_AUTHORIZATION,
+      capabilities: TEST_AUTHORIZATION.capabilities.filter(
+        (capability) => capability !== 'admin',
+      ),
+    };
+    const task = await context.runtime.tasks.create(
+      {
+        description: 'Archive this task',
+        prompt: 'Keep lease ownership fenced.',
+      },
+      writer,
+    );
+    const claim = await context.runtime.tasks.claimLease(task.id, 60, writer);
+    await expect(
+      context.runtime.tasks.archive(
+        task.id,
+        {
+          expectedRevision: claim.task.revision,
+          leaseToken: 'A'.repeat(43),
+        },
+        writer,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    const archived = await context.runtime.tasks.archive(
+      task.id,
+      {
+        expectedRevision: claim.task.revision,
+        leaseToken: claim.leaseToken,
+      },
+      writer,
+    );
+    expect(archived).toMatchObject({ id: task.id, claimed: false });
+    expect(archived.archivedAt).toBeTruthy();
+    await expect(
+      context.db
+        .prepare(
+          `SELECT lease_id, lease_token_digest, lease_owner_principal_id,
+                  lease_expires_at
+           FROM workshop_tasks WHERE id = ?`,
+        )
+        .bind(task.id)
+        .first(),
+    ).resolves.toEqual({
+      lease_id: null,
+      lease_token_digest: null,
+      lease_owner_principal_id: null,
+      lease_expires_at: null,
+    });
+  });
 });

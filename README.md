@@ -36,7 +36,7 @@ gnolith-workshop bootstrap-v1 \
 The local bearer credential file must contain exactly 32 random bytes encoded
 as unpadded base64url, optionally followed by one LF. The token is never a
 command argument and only its domain-separated digest is persisted.
-Bootstrap requires Workshop schema version 8 and commits that credential digest
+Bootstrap requires Workshop schema version 9 and commits that credential digest
 plus an owner receipt through Taproot's sealed owner-adapter API.
 
 Local resource payload backup and restore use the public server-only factory:

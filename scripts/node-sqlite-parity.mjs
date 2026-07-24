@@ -18,7 +18,7 @@ try {
     'TAPROOT_TARBALL',
     resolve('..', 'taproot-artifacts', 'gnolith-taproot-0.5.0.tgz'),
     process.env.TAPROOT_TARBALL_SHA256 ??
-      '9449a748b04926462f9549833a1a256e9fc4d7c557b01b6e3983606627005480',
+      'cf338fb680a7f1b4df7c6e973aed92970f4676f9297b30c6dc5505f7f085377e',
   );
   const [packed] = JSON.parse(
     execFileSync(
@@ -150,8 +150,8 @@ import {
 } from '@gnolith/workshop/migrations';
 
 assert.equal(workshopPackage.version, '0.5.0');
-assert.equal(workshopPackage.schemaVersion, 8);
-assert.equal(WORKSHOP_SCHEMA_VERSION, 8);
+assert.equal(workshopPackage.schemaVersion, 9);
+assert.equal(WORKSHOP_SCHEMA_VERSION, 9);
 const temporary = await mkdtemp(join(tmpdir(), 'workshop-consumer-'));
 const path = join(temporary, 'shared.sqlite');
 const baseIri = 'https://packed-parity.example';
@@ -161,12 +161,13 @@ try {
   await initializeTaproot(db, { baseIri });
   assert.deepEqual(await applyWorkshopMigrations(db), {
     previousVersion: 0,
-    version: 8,
+    version: 9,
     applied: [
       '0001_workshop', '0002_revisions', '0003_resumable_onboarding',
       '0004_authorization', '0005_cursor_snapshots',
       '0006_canonical_search_domains', '0007_task_leases',
       '0008_bootstrap_credentials',
+      '0009_operation_receipts',
     ],
   });
   const key = await crypto.subtle.generateKey(
@@ -194,7 +195,7 @@ try {
       ownerAdapter,
       commitAuthorizationBootstrapV1,
       readProtectedCredential: async () => credentialFile.slice(),
-      workshopSchemaVersion: 8,
+      workshopSchemaVersion: 9,
     },
   );
   assert.equal(receipt.installationId, installationId);
@@ -217,7 +218,7 @@ try {
   await db.close();
   db = new NodeSqliteDatabase(path);
   assert.deepEqual(await applyWorkshopMigrations(db), {
-    previousVersion: 8, version: 8, applied: [],
+    previousVersion: 9, version: 9, applied: [],
   });
 } finally {
   await db.close().catch(() => {});

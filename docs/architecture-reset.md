@@ -21,8 +21,9 @@ scope mappings, and live principal resolution.
 Migrations are explicit operator actions. Schema version 7 adds opaque,
 expiring task leases, owner and revision fencing, idempotent release receipts,
 and lease audit events. Schema version 8 adds durable local credential records
-and owner-bound bootstrap receipts. Raw bearer and lease tokens are never
-stored.
+and owner-bound bootstrap receipts. Schema version 9 adds durable idempotency
+receipts for prompt mutations and memory deletion. Raw bearer and lease tokens
+are never stored.
 Backup APIs operate through Workshop owner and migration-ledger handles, report
 legacy counts during inspection, and expire imported task leases.
 

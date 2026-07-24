@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { workshopPackage } from '../src/index.js';
 import {
   adoptWorkshopLegacyOwnerV042,
+  createWorkshopLegacyOwnerAdoptionHandleV1,
   decodeWorkshopLegacyOwnerV042,
   type WorkshopLegacyV042Attestation,
 } from '../src/backup.js';
@@ -44,7 +45,7 @@ describe('migration artifact integrity', () => {
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')
         .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
-    ).toEqual([true, true, false, false, false, false, false]);
+    ).toEqual([true, true, false, false, false, false, false, false]);
     expect(workshopMigrations[3]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[4]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[5]!.sql).toContain("package_version = '0.4.0'");
@@ -170,6 +171,36 @@ describe('migration artifact integrity', () => {
         expireClaimsAt: '2026-07-23T13:00:00.000Z',
         sourceDigest: decoded.digests.ownerFragment,
       });
+      const destination = await database();
+      try {
+        await applyWorkshopMigrations(destination.db, testLedger);
+        const handle = createWorkshopLegacyOwnerAdoptionHandleV1(
+          destination.db,
+          {
+            connectionId: 'connection:destination',
+            registrationFingerprint: 'b'.repeat(64),
+          },
+        );
+        await expect(
+          adoptWorkshopLegacyOwnerV042(decoded, handle, 'installation:target', {
+            clock: () => new Date('2026-07-23T13:00:00.000Z'),
+          }),
+        ).resolves.toMatchObject({ installationId: 'installation:target' });
+        await expect(
+          destination.db
+            .prepare(
+              `SELECT installation_id, claimed
+               FROM workshop_tasks WHERE id = ?`,
+            )
+            .bind('legacy-owner-task')
+            .first(),
+        ).resolves.toMatchObject({
+          installation_id: 'installation:target',
+          claimed: 0,
+        });
+      } finally {
+        await destination.dispose();
+      }
       await expect(
         adoptWorkshopLegacyOwnerV042(
           { ...decoded },

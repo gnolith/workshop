@@ -39,6 +39,12 @@ import {
   commitWorkshopCanonicalSearchMutationV1,
   type WorkshopSearchDomainV1,
 } from './canonical-producer.js';
+import {
+  prepareWorkshopOperationReceipt,
+  waitForWorkshopOperationReceipt,
+  workshopOperationReceiptStatement,
+  type WorkshopOperationReceiptBinding,
+} from './idempotency.js';
 import { pageLimit, requiredText, validation } from './validation.js';
 
 interface PromptRow {
@@ -234,8 +240,17 @@ export class PromptService {
   async create(
     input: CreatePromptInput,
     authorization: AuthorizationContext,
+    idempotencyKey?: string,
   ): Promise<Prompt> {
     const context = await this.#context(authorization, 'prompt:write');
+    const binding = idempotencyKey
+      ? receiptBinding(context, 'prompt.create', idempotencyKey)
+      : undefined;
+    const prepared = binding
+      ? await prepareWorkshopOperationReceipt(this.db, binding, { input })
+      : undefined;
+    if (prepared?.replay)
+      return authorizedReceiptPrompt(prepared.replay, context);
     const workspaceId = requireActiveWorkspace(context);
     const now = this.#clock().toISOString();
     const id = input.id ? requiredText(input.id, 'id', 256) : this.#createId();
@@ -294,6 +309,19 @@ export class PromptService {
         ],
       },
       revisionStatement(prompt, context.principalId, eventId, now),
+      ...(binding && prepared
+        ? [
+            workshopOperationReceiptStatement(
+              binding,
+              prepared.requestDigest,
+              prompt.id,
+              prompt,
+              now,
+              prompt.revision,
+              eventId,
+            ),
+          ]
+        : []),
     ];
     try {
       const receipt = await commitWorkshopCanonicalSearchMutationV1(
@@ -316,11 +344,18 @@ export class PromptService {
         throw new WorkshopError('internal_error', 'Prompt creation failed');
       return toPrompt(row);
     } catch (error) {
+      if (binding) {
+        const raced = await waitForWorkshopOperationReceipt(this.db, binding, {
+          input,
+        });
+        if (raced.replay) return authorizedReceiptPrompt(raced.replay, context);
+      }
       if (
         error instanceof Error &&
         /UNIQUE constraint failed/iu.test(error.message)
-      )
+      ) {
         throw new WorkshopError('conflict', 'Prompt id or name already exists');
+      }
       throw error;
     }
   }
@@ -329,9 +364,18 @@ export class PromptService {
     id: string,
     input: UpdatePromptInput,
     authorization: AuthorizationContext,
+    idempotencyKey?: string,
   ): Promise<Prompt> {
     const context = await this.#context(authorization, 'prompt:write');
     validateRevision(input.expectedRevision);
+    const binding = idempotencyKey
+      ? receiptBinding(context, 'prompt.update', idempotencyKey)
+      : undefined;
+    const prepared = binding
+      ? await prepareWorkshopOperationReceipt(this.db, binding, { id, input })
+      : undefined;
+    if (prepared?.replay)
+      return authorizedReceiptPrompt(prepared.replay, context, id);
     const current = await this.#getForMutation(id, context);
     if (current.revision !== input.expectedRevision)
       throw new WorkshopError('conflict', 'Prompt state changed');
@@ -423,22 +467,48 @@ export class PromptService {
         ],
       },
       revisionStatement(next, context.principalId, eventId, next.updatedAt),
+      ...(binding && prepared
+        ? [
+            workshopOperationReceiptStatement(
+              binding,
+              prepared.requestDigest,
+              id,
+              next,
+              next.updatedAt,
+              next.revision,
+              eventId,
+            ),
+          ]
+        : []),
     ];
-    const receipt = await commitWorkshopCanonicalSearchMutationV1(
-      this.options.search,
-      {
-        context,
-        eventId,
-        sourceId: id,
-        operation: 'upsert',
-        changeClass: policyChanged ? 'prompt.policy' : 'prompt.update',
-        sourceRevision: next.revision,
-        sourcePolicyRevision: next.policyRevision,
-        predecessor: sequence,
-        canonicalPostState: next,
-        statements,
-      },
-    );
+    let receipt;
+    try {
+      receipt = await commitWorkshopCanonicalSearchMutationV1(
+        this.options.search,
+        {
+          context,
+          eventId,
+          sourceId: id,
+          operation: 'upsert',
+          changeClass: policyChanged ? 'prompt.policy' : 'prompt.update',
+          sourceRevision: next.revision,
+          sourcePolicyRevision: next.policyRevision,
+          predecessor: sequence,
+          canonicalPostState: next,
+          statements,
+        },
+      );
+    } catch (error) {
+      if (binding) {
+        const raced = await waitForWorkshopOperationReceipt(this.db, binding, {
+          id,
+          input,
+        });
+        if (raced.replay)
+          return authorizedReceiptPrompt(raced.replay, context, id);
+      }
+      throw error;
+    }
     const row = receipt.results[0]?.results[0] as PromptRow | undefined;
     if (!row) throw new WorkshopError('conflict', 'Prompt state changed');
     return toPrompt(row);
@@ -456,9 +526,23 @@ export class PromptService {
     id: string,
     expectedRevision: number,
     authorization: AuthorizationContext,
+    idempotencyKey?: string,
   ): Promise<void> {
     const context = await this.#context(authorization, 'prompt:write');
     validateRevision(expectedRevision);
+    const binding = idempotencyKey
+      ? receiptBinding(context, 'prompt.delete', idempotencyKey)
+      : undefined;
+    const prepared = binding
+      ? await prepareWorkshopOperationReceipt(this.db, binding, {
+          id,
+          expectedRevision,
+        })
+      : undefined;
+    if (prepared?.replay) {
+      authorizedReceiptPrompt(prepared.replay, context, id);
+      return;
+    }
     const current = await this.#getForMutation(id, context);
     if (current.revision !== expectedRevision)
       throw new WorkshopError('conflict', 'Prompt state changed');
@@ -505,9 +589,34 @@ export class PromptService {
             ],
           },
           revisionStatement(deleted, context.principalId, eventId, updatedAt),
+          ...(binding && prepared
+            ? [
+                workshopOperationReceiptStatement(
+                  binding,
+                  prepared.requestDigest,
+                  id,
+                  deleted,
+                  updatedAt,
+                  deleted.revision,
+                  eventId,
+                ),
+              ]
+            : []),
         ],
       },
-    );
+    ).catch(async (error: unknown) => {
+      if (binding) {
+        const raced = await waitForWorkshopOperationReceipt(this.db, binding, {
+          id,
+          expectedRevision,
+        });
+        if (raced.replay) {
+          authorizedReceiptPrompt(raced.replay, context, id);
+          return { results: [{ meta: { changes: 1 } }] };
+        }
+      }
+      throw error;
+    });
     if (
       (receipt.results[0]?.meta as { changes?: number } | undefined)
         ?.changes === 0
@@ -679,7 +788,12 @@ function revisionStatement(
   return {
     sql: `INSERT INTO workshop_prompt_revisions
       (installation_id, prompt_id, revision, snapshot_json, actor_principal_id, event_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM workshop_prompts
+        WHERE installation_id = ? AND id = ? AND revision = ?
+          AND search_event_id = ?
+      )`,
     values: [
       prompt.installationId,
       prompt.id,
@@ -688,6 +802,10 @@ function revisionStatement(
       actor,
       eventId,
       now,
+      prompt.installationId,
+      prompt.id,
+      prompt.revision,
+      eventId,
     ],
   };
 }
@@ -748,6 +866,44 @@ function parsePromptRevision(
     !prompt.visibility
   )
     throw denied();
+  return prompt;
+}
+
+function receiptBinding(
+  context: AuthorizationContext,
+  operation: WorkshopOperationReceiptBinding['operation'],
+  idempotencyKey: string,
+): WorkshopOperationReceiptBinding {
+  return {
+    installationId: context.installationId,
+    principalId: context.principalId,
+    operation,
+    idempotencyKey,
+  };
+}
+
+function authorizedReceiptPrompt(
+  replay: { subjectId: string; response: unknown },
+  context: AuthorizationContext,
+  expectedId?: string,
+): Prompt {
+  if (
+    expectedId !== undefined &&
+    (replay.subjectId !== expectedId ||
+      (replay.response as { id?: unknown } | null)?.id !== expectedId)
+  )
+    throw new WorkshopError(
+      'conflict',
+      'Idempotency key was used for another mutation',
+      409,
+    );
+  const raw = replay.response as { revision?: unknown } | null;
+  const prompt = parsePromptRevision(
+    JSON.stringify(replay.response),
+    replay.subjectId,
+    Number(raw?.revision),
+  );
+  authorizeRecord(prompt, context);
   return prompt;
 }
 

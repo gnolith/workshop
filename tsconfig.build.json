@@ -20,6 +20,7 @@
     "src/producers.ts",
     "src/operations.ts",
     "src/executable.ts",
+    "src/local-adapter.ts",
     "src/cli.ts",
     "src/generated/operations.ts"
   ],

@@ -11,5 +11,6 @@ export * from './server/assets.js';
 export * from './server/config.js';
 export * from './server/lifecycle.js';
 export * from './server/service.js';
+export * from './server/search.js';
 export * from './backup.js';
 export * from './producers.js';

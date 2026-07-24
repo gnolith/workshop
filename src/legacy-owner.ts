@@ -4,6 +4,7 @@ import {
 } from './migrations.js';
 import { workshopMigrations } from './migrations/manifest.js';
 import { WorkshopError } from './protocol/errors.js';
+import type { D1DatabaseLike } from './server/database.js';
 
 const LEGACY_TABLES = [
   'workshop_cursor_entries',
@@ -18,6 +19,22 @@ const LEGACY_TABLES = [
   'workshop_task_revisions',
   'workshop_tasks',
 ] as const;
+
+const LEGACY_IMPORT_ORDER: readonly Exclude<
+  LegacyTableName,
+  'workshop_schema'
+>[] = [
+  'workshop_onboarding_runs',
+  'workshop_onboarding_steps',
+  'workshop_tasks',
+  'workshop_task_revisions',
+  'workshop_memories',
+  'workshop_memory_revisions',
+  'workshop_prompts',
+  'workshop_prompt_revisions',
+  'workshop_cursor_snapshots',
+  'workshop_cursor_entries',
+];
 
 const DEFAULT_MAX_ROWS = 50_000;
 const MAX_MAX_ROWS = 100_000;
@@ -100,6 +117,77 @@ export interface WorkshopLegacyOwnerAdoptionHandle {
     expireClaimsAt: string;
     signal: AbortSignal;
   }): Promise<void>;
+}
+
+export interface WorkshopLegacyOwnerDestinationBindingV1 {
+  connectionId: string;
+  registrationFingerprint: string;
+}
+
+/**
+ * Creates the owner-scoped exact-0.4.2 adoption handle. The factory retains all
+ * Workshop table knowledge; assembly code receives only the sealed handle.
+ */
+export function createWorkshopLegacyOwnerAdoptionHandleV1(
+  db: D1DatabaseLike,
+  binding: WorkshopLegacyOwnerDestinationBindingV1,
+): WorkshopLegacyOwnerAdoptionHandle {
+  validateDestinationBinding(binding);
+  return Object.freeze({
+    owner: '@gnolith/workshop' as const,
+    connectionId: binding.connectionId,
+    registrationFingerprint: binding.registrationFingerprint,
+    async adoptLegacyOwnerV042(
+      input: Parameters<
+        WorkshopLegacyOwnerAdoptionHandle['adoptLegacyOwnerV042']
+      >[0],
+    ) {
+      input.signal.throwIfAborted();
+      const payload = fragmentPayloads.get(input.fragment);
+      if (!payload) throw invalid('Legacy owner fragment is not verified');
+      if ((await digest(canonicalJson(payload))) !== input.sourceDigest)
+        throw invalid('Legacy owner fragment digest does not match');
+      validateAttestation({
+        packageName: '@gnolith/workshop',
+        packageVersion: '0.4.2',
+        schemaVersion: 6,
+        migrationLedger: input.migrationLedger,
+      });
+      validateIdentifier(input.installationId);
+      if (!Number.isFinite(Date.parse(input.expireClaimsAt)))
+        throw invalid('Legacy claim expiry is invalid');
+
+      const statements: ReturnType<D1DatabaseLike['prepare']>[] = [];
+      for (const table of LEGACY_IMPORT_ORDER) {
+        for (const row of payload.tables[table]) {
+          input.signal.throwIfAborted();
+          const rebound = rebindInstallation(row, input.installationId);
+          const columns = Object.keys(rebound);
+          statements.push(
+            db
+              .prepare(
+                `INSERT INTO "${table}" (${columns
+                  .map((column) => `"${column}"`)
+                  .join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+              )
+              .bind(...columns.map((column) => rebound[column])),
+          );
+        }
+      }
+      // Legacy boolean claims have no v7 lease token and must never become an
+      // unowned live lease in the destination.
+      statements.push(
+        db
+          .prepare(
+            `UPDATE workshop_tasks
+             SET claimed = 0, claimed_at = NULL
+             WHERE installation_id = ? AND claimed != 0`,
+          )
+          .bind(input.installationId),
+      );
+      await db.batch(statements);
+    },
+  });
 }
 
 export interface WorkshopLegacyOwnerAdoptionReceiptV1 {
@@ -391,6 +479,28 @@ function validBindingValue(value: unknown): value is string {
     value.length > 0 &&
     value.length <= 256 &&
     !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function validateDestinationBinding(
+  binding: WorkshopLegacyOwnerDestinationBindingV1,
+): void {
+  if (
+    !validBindingValue(binding.connectionId) ||
+    !/^[a-f0-9]{64}$/u.test(binding.registrationFingerprint)
+  )
+    throw invalid('Legacy owner destination binding is invalid');
+}
+
+function rebindInstallation(
+  row: LegacyRow,
+  installationId: string,
+): Record<string, LegacyScalar> {
+  return Object.fromEntries(
+    Object.entries(row).map(([key, value]) => [
+      key,
+      key === 'installation_id' ? installationId : value,
+    ]),
   );
 }
 

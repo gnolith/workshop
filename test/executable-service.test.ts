@@ -15,7 +15,7 @@ const ready: WorkshopStatusSnapshot = {
   baseIri: 'https://example.invalid/',
   migrations: {
     namespace: '@gnolith/workshop',
-    version: 8,
+    version: 9,
     ready: true,
   },
   compatibility: { diamond: true, taproot: true },

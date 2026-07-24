@@ -77,7 +77,7 @@ export function createWorkshopBootstrapOwnerAdapterV1(
           workspaceId: payload.workspaceId,
           idempotencyKey: payload.idempotencyKey,
           grantManifestDigest: payload.grantManifestDigest,
-          workshopSchemaVersion: 8,
+          workshopSchemaVersion: 9,
         } as const;
         const receiptJson = canonicalize(ownerReceipt);
         return Promise.resolve({
@@ -171,10 +171,10 @@ export async function bootstrapWorkshopV1(
   dependencies: BootstrapWorkshopV1Dependencies,
 ): Promise<BootstrapWorkshopV1Receipt> {
   validateInput(input);
-  if (dependencies.workshopSchemaVersion !== 8)
+  if (dependencies.workshopSchemaVersion !== 9)
     throw new WorkshopError(
       'dependency_unavailable',
-      'Workshop schema migration 0008 is required before bootstrap',
+      'Workshop schema migration 0009 is required before bootstrap',
       503,
     );
   const credentialFile = await dependencies.readProtectedCredential(

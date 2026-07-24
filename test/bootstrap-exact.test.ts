@@ -77,7 +77,7 @@ describe('exact Taproot authorization bootstrap owner', () => {
           async readProtectedCredential() {
             return credentialFile.slice();
           },
-          workshopSchemaVersion: 8,
+          workshopSchemaVersion: 9,
           clock: () => new Date('2026-07-23T12:00:00.000Z'),
         },
       );
@@ -86,7 +86,7 @@ describe('exact Taproot authorization bootstrap owner', () => {
         installationId,
         principalId: 'principal:owner',
         workspaceId: 'workspace:default',
-        workshopSchemaVersion: 8,
+        workshopSchemaVersion: 9,
         replayed: false,
       });
       expect(receipt.credentialDigest).toMatch(/^[a-f0-9]{64}$/u);

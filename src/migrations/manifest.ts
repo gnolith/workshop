@@ -4,7 +4,7 @@ export interface WorkshopMigration {
   sql: string;
 }
 
-export const WORKSHOP_SCHEMA_VERSION = 8;
+export const WORKSHOP_SCHEMA_VERSION = 9;
 
 export const workshopMigrations: readonly WorkshopMigration[] = [
   {
@@ -522,6 +522,51 @@ SET version = 8,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
+  {
+    id: '0009_operation_receipts',
+    checksum:
+      'sha256:a5b953d80f796cb16c5de532283b8f16f34a2f3de56bb721e4e07f8811ed657c',
+    sql: `CREATE TABLE workshop_operation_receipts (
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (
+    operation IN (
+      'memory.delete',
+      'prompt.create',
+      'prompt.update',
+      'prompt.delete'
+    )
+  ),
+  idempotency_key TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  request_digest TEXT NOT NULL CHECK (
+    length(request_digest) = 64
+    AND request_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (
+    installation_id,
+    principal_id,
+    operation,
+    idempotency_key
+  )
+);
+
+CREATE INDEX workshop_operation_receipts_subject_idx
+  ON workshop_operation_receipts (
+    installation_id,
+    operation,
+    subject_id,
+    created_at
+  );
+
+UPDATE workshop_schema
+SET version = 9,
+    package_version = '0.5.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
 ] as const;
 
 export const expectedWorkshopTables = [
@@ -533,6 +578,7 @@ export const expectedWorkshopTables = [
   'workshop_memories',
   'workshop_onboarding_runs',
   'workshop_onboarding_steps',
+  'workshop_operation_receipts',
   'workshop_prompt_revisions',
   'workshop_prompts',
   'workshop_schema',
@@ -551,6 +597,7 @@ export const expectedWorkshopIndexes = [
   'workshop_memories_updated_idx',
   'workshop_onboarding_runs_state_idx',
   'workshop_onboarding_steps_state_idx',
+  'workshop_operation_receipts_subject_idx',
   'workshop_prompt_revisions_history_idx',
   'workshop_prompts_authorization_idx',
   'workshop_prompts_list_idx',

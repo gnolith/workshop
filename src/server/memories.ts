@@ -40,6 +40,11 @@ import {
   type WorkshopSearchDomainV1,
 } from './canonical-producer.js';
 import {
+  prepareWorkshopOperationReceipt,
+  waitForWorkshopOperationReceipt,
+  workshopOperationReceiptStatement,
+} from './idempotency.js';
+import {
   isoDate,
   memorySlug,
   memorySlugs,
@@ -620,11 +625,30 @@ export class MemoryService {
     slugValue: string,
     expectedRevision: number,
     authorization: AuthorizationContext,
+    idempotencyKey?: string,
   ): Promise<void> {
     const context = await this.#context(authorization, 'memory:write');
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
       throw validation('expectedRevision must be a positive safe integer');
     const slug = memorySlug(slugValue);
+    const binding = idempotencyKey
+      ? {
+          installationId: context.installationId,
+          principalId: context.principalId,
+          operation: 'memory.delete' as const,
+          idempotencyKey,
+        }
+      : undefined;
+    const prepared = binding
+      ? await prepareWorkshopOperationReceipt(this.db, binding, {
+          slug,
+          expectedRevision,
+        })
+      : undefined;
+    if (prepared?.replay) {
+      authorizedReceiptMemory(prepared.replay, context, slug);
+      return;
+    }
     const predicate = visibilitySql('workshop_memories', context);
     const row = await this.db
       .prepare(
@@ -680,9 +704,34 @@ export class MemoryService {
             eventId,
             updatedAt,
           ),
+          ...(binding && prepared
+            ? [
+                workshopOperationReceiptStatement(
+                  binding,
+                  prepared.requestDigest,
+                  slug,
+                  deleted,
+                  updatedAt,
+                  deleted.revision,
+                  eventId,
+                ),
+              ]
+            : []),
         ],
       },
-    );
+    ).catch(async (error: unknown) => {
+      if (binding) {
+        const raced = await waitForWorkshopOperationReceipt(this.db, binding, {
+          slug,
+          expectedRevision,
+        });
+        if (raced.replay) {
+          authorizedReceiptMemory(raced.replay, context, slug);
+          return { results: [{ meta: { changes: 1 } }] };
+        }
+      }
+      throw error;
+    });
     if (
       (receipt.results[0]?.meta as { changes?: number } | undefined)
         ?.changes === 0
@@ -773,7 +822,12 @@ export class MemoryService {
     return {
       sql: `INSERT INTO workshop_memory_revisions
         (installation_id, memory_id, revision, snapshot_json, actor_principal_id, event_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM workshop_memories
+          WHERE installation_id = ? AND slug = ? AND revision = ?
+            AND search_event_id = ?
+        )`,
       values: [
         memory.installationId,
         memory.slug,
@@ -782,6 +836,10 @@ export class MemoryService {
         actor,
         eventId,
         now,
+        memory.installationId,
+        memory.slug,
+        memory.revision,
+        eventId,
       ],
     };
   }
@@ -936,6 +994,30 @@ function parseMemoryRevision(
     !memory.visibility
   )
     throw denied();
+  return memory;
+}
+
+function authorizedReceiptMemory(
+  replay: { subjectId: string; response: unknown },
+  context: AuthorizationContext,
+  expectedSlug: string,
+): Memory {
+  if (
+    replay.subjectId !== expectedSlug ||
+    (replay.response as { slug?: unknown } | null)?.slug !== expectedSlug
+  )
+    throw new WorkshopError(
+      'conflict',
+      'Idempotency key was used for another mutation',
+      409,
+    );
+  const raw = replay.response as { revision?: unknown } | null;
+  const memory = parseMemoryRevision(
+    JSON.stringify(replay.response),
+    expectedSlug,
+    Number(raw?.revision),
+  );
+  authorizeRecord(memory, context);
   return memory;
 }
 

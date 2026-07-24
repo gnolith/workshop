@@ -26,7 +26,11 @@ try {
     JSON.stringify({
       private: true,
       type: 'module',
-      dependencies: { '@gnolith/workshop': `file:${tarball}` },
+      dependencies: {
+        '@gnolith/workshop': `file:${tarball}`,
+        '@gnolith/diamond': `file:${resolve(root, '..', 'diamond', 'gnolith-diamond-0.5.0.tgz')}`,
+        '@gnolith/taproot': `file:${resolve(root, '..', 'taproot-artifacts', 'gnolith-taproot-0.5.0.tgz')}`,
+      },
     }),
   );
   execFileSync('npm', ['install', '--ignore-scripts'], {
@@ -42,11 +46,17 @@ try {
     join(fixture, 'adapter.mjs'),
     `
 import { createOperationRuntime } from '@gnolith/workshop';
+import { createWorkshopLocalExecutableAdapterV1 } from '@gnolith/workshop/local-adapter';
 import {
   bindWorkshopProducerHandles,
   createAuthenticationVerifier,
   digestLocalBearerToken,
 } from '@gnolith/workshop/server';
+
+assertFactory(createWorkshopLocalExecutableAdapterV1);
+function assertFactory(value) {
+  if (typeof value !== 'function') throw new Error('packed local adapter factory is unavailable');
+}
 
 const bytes = Uint8Array.from({ length: 32 }, (_, index) => index);
 const digest = await digestLocalBearerToken(bytes);
@@ -72,7 +82,7 @@ const principal = {
 };
 const status = {
   baseIri: 'https://packed.invalid/',
-  migrations: { namespace: '@gnolith/workshop', version: 8, ready: true },
+  migrations: { namespace: '@gnolith/workshop', version: 9, ready: true },
   compatibility: { diamond: true, taproot: true },
   canonicalReady: true,
   authorizationReady: true,

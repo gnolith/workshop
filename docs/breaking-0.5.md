@@ -32,7 +32,7 @@ library after Diamond and Taproot migrations; `serve` will fail closed rather
 than apply pending migrations. Run offline `bootstrap-v1` only after all owner
 migrations succeed.
 
-Schema 8 is required for bootstrap because the Workshop owner adapter commits
+Schema 9 is required for bootstrap because the Workshop owner adapter commits
 the local credential digest and immutable bootstrap receipt in Taproot's sealed
 authorization-bootstrap transaction.
 

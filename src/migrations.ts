@@ -248,6 +248,7 @@ function packageVersionForSchema(version: number): string | undefined {
       return '0.4.0';
     case 7:
     case 8:
+    case 9:
       return '0.5.0';
     default:
       return undefined;
@@ -434,6 +435,7 @@ async function validateCanonicalSearchSchema(
     'workshop_memory_revisions',
     'workshop_onboarding_runs',
     'workshop_onboarding_steps',
+    ...(installed >= 9 ? ['workshop_operation_receipts'] : []),
     'workshop_prompt_revisions',
     'workshop_prompts',
     'workshop_schema',
@@ -532,6 +534,7 @@ async function validateCanonicalSearchSchema(
     'workshop_memory_revisions_history_idx',
     'workshop_onboarding_runs_state_idx',
     'workshop_onboarding_steps_state_idx',
+    ...(installed >= 9 ? ['workshop_operation_receipts_subject_idx'] : []),
     'workshop_prompt_revisions_history_idx',
     'workshop_prompts_authorization_idx',
     'workshop_prompts_list_idx',

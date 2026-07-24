@@ -53,6 +53,10 @@
       "types": "./dist/executable.d.ts",
       "import": "./dist/executable.js"
     },
+    "./local-adapter": {
+      "types": "./dist/local-adapter.d.ts",
+      "import": "./dist/local-adapter.js"
+    },
     "./bootstrap": {
       "types": "./dist/bootstrap.d.ts",
       "import": "./dist/bootstrap.js"
