@@ -1,21 +1,23 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
-import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
+  { ignores: ['dist/**', 'src/generated/**'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
-  reactHooks.configs.flat.recommended,
   {
-    ignores: ['dist/**'],
     languageOptions: {
       parserOptions: {
         projectService: {
           allowDefaultProject: ['scripts/*.mjs'],
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 17,
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 32,
         },
         tsconfigRootDir: import.meta.dirname,
       },
+    },
+    rules: {
+      'no-control-regex': 'off',
+      '@typescript-eslint/prefer-promise-reject-errors': 'off',
     },
   },
   {

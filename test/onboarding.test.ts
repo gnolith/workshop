@@ -17,7 +17,7 @@ const auth = (principalId = 'owner'): AuthorizationContext => ({
   principalId,
   activeWorkspaceId: 'workspace:test',
   workspaceIds: ['workspace:test'],
-  capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write'],
+  capabilities: ['read', 'task:write', 'memory:write', 'knowledge:write'],
   authorizationRevision: 1,
 });
 

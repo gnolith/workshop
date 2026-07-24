@@ -79,7 +79,7 @@ const MAX_CLAUSES = 64;
 const MAX_ATOMS_PER_CLAUSE = 64;
 
 export function authorize(
-  principal: WorkshopPrincipal | null,
+  principal: WorkshopPrincipal | AuthorizationContext | null,
   capability: WorkshopCapability,
 ): AuthorizationContext {
   if (!principal) {
@@ -115,6 +115,7 @@ export function normalizeAuthorizationContext(
     'workspaceIds',
     'capabilities',
     'authorizationRevision',
+    ...('credentialId' in value ? ['credentialId'] : []),
   ]);
   const installationId = identifier(value.installationId, 'installationId');
   const principalId = identifier(value.principalId, 'principalId');

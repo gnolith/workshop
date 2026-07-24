@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0]
+
+- Replaced the UI/Site/Worker package with the `gnolith-workshop` self-hosted
+  executable, one listener, authenticated MCP and BFF, and explicit offline
+  bootstrap.
+- Generated one 51-operation `gnolith` catalog shared by schemas, MCP, BFF,
+  validation, and the generic client.
+- Added separate local-bearer and remote-OAuth profiles, fail-closed readiness,
+  verified immutable Waystone assets, bounded lifecycle controls, task leases,
+  and owner-scoped backup APIs.
+- Added a read-only, bounded exact-0.4.2 legacy-owner decoder and owner-bound
+  adoption adapter with opaque fragments, migration-ledger evidence, digests,
+  and Task/Memory/Prompt/revision contribution counts.
+- Coupled task lease claim, release, and completion atomically to canonical
+  source/history updates, durable idempotency receipts, and lease audit events.
+- Added schema 8 durable credential/bootstrap receipts and an exact Taproot
+  authorization-bootstrap owner adapter.
+- Added public bounded local-filesystem ResourceBlob backup/restore ports with
+  private content-addressed paths, verified staging, collision checks, rebinds,
+  rollback, and symlink/traversal defenses.
+- Removed legacy operation aliases, UI and CSS exports, Site route factories,
+  stdio transport, and the parallel hand-written MCP catalog.
+
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [0.4.2] - 2026-07-22

@@ -20,15 +20,26 @@ jobs:
       - run: npm ci
       - name: Pack the pinned Diamond source
         env:
-          DIAMOND_COMMIT: 326da7e48d77cddc5a58e21cf65d872ecb9b3b74
+          DIAMOND_COMMIT: fe9185a4dae73330969866d8871cefad6fc7e87c
         run: |
           git clone --filter=blob:none https://github.com/gnolith/diamond.git "$RUNNER_TEMP/diamond"
           git -C "$RUNNER_TEMP/diamond" checkout --detach "$DIAMOND_COMMIT"
           test "$(git -C "$RUNNER_TEMP/diamond" rev-parse HEAD)" = "$DIAMOND_COMMIT"
           npm ci --prefix "$RUNNER_TEMP/diamond"
           npm pack "$RUNNER_TEMP/diamond" --pack-destination "$RUNNER_TEMP"
+      - name: Pack the pinned Taproot source
+        env:
+          TAPROOT_COMMIT: d3a7186f78f6695d3d73bb408ef89b91e0eb2431
+        run: |
+          git clone --filter=blob:none https://github.com/gnolith/taproot.git "$RUNNER_TEMP/taproot"
+          git -C "$RUNNER_TEMP/taproot" checkout --detach "$TAPROOT_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/taproot" rev-parse HEAD)" = "$TAPROOT_COMMIT"
+          npm ci --prefix "$RUNNER_TEMP/taproot"
+          npm pack "$RUNNER_TEMP/taproot" --pack-destination "$RUNNER_TEMP"
       - name: Verify packed-artifact node:sqlite parity
         env:
-          DIAMOND_TARBALL: ${{ runner.temp }}/gnolith-diamond-0.4.0.tgz
-          DIAMOND_TARBALL_SHA256: ac8e34810a8504bd891b36a199973f2d65ef652555644813c7a36f1c7016c9d2
+          DIAMOND_TARBALL: ${{ runner.temp }}/gnolith-diamond-0.5.0.tgz
+          DIAMOND_TARBALL_SHA256: 6a8075a70162fe2567579f7fe110e674509b648923b18fdb310833b44739c300
+          TAPROOT_TARBALL: ${{ runner.temp }}/gnolith-taproot-0.5.0.tgz
+          TAPROOT_TARBALL_SHA256: 9449a748b04926462f9549833a1a256e9fc4d7c557b01b6e3983606627005480
         run: node scripts/node-sqlite-parity.mjs

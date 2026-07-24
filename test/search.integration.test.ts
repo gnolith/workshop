@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
 import {
   bootstrapTaprootAuthorization,
-  createInstallationDomainMutationGuard,
   createTaprootHostWriteCapability,
   initializeTaproot,
 } from '@gnolith/taproot';
@@ -111,24 +110,22 @@ describe('Workshop external search producers', () => {
         ),
       ).rejects.toBeDefined();
       let pages = 0;
+      let adopted = 0;
       let complete = false;
+      let cursor: string | null = null;
       while (!complete) {
         const receipt = await search.task.producer.adoptLegacyPage(context, {
+          cursor,
           limit: 100,
         });
         pages += 1;
+        adopted += receipt.adopted;
         complete = receipt.complete;
+        cursor = receipt.cursor;
         expect(pages).toBeLessThanOrEqual(11);
       }
+      expect(adopted).toBe(1_001);
       expect(pages).toBe(11);
-      const registered = await workshopDb
-        .prepare(
-          `SELECT COUNT(*) AS count FROM taproot_unified_search_source_registry
-           WHERE installation_id = ? AND source_kind = 'task'`,
-        )
-        .bind(installationId)
-        .first<{ count: number }>();
-      expect(registered?.count).toBe(1_001);
 
       await db.close();
       db = new NodeSqliteDatabase(path);
@@ -142,11 +139,14 @@ describe('Workshop external search producers', () => {
         registrationContext: context,
       });
       await expect(
+        search.task.currentPredecessor('legacy-0000', context),
+      ).resolves.toMatchObject({
+        eventId: expect.stringMatching(/^external-adoption-event-/u),
+        sequence: expect.any(Number),
+      });
+      await expect(
         search.materialization.health(context),
       ).resolves.toBeDefined();
-      await expect(
-        search.task.producer.adoptLegacyPage(context, { limit: 100 }),
-      ).rejects.toThrow('legacy adoption is not active');
       await expect(
         search.search(
           { text: 'legacy', limit: 10 },
@@ -187,40 +187,42 @@ describe('Workshop external search producers', () => {
         workspaceIds: ['workspace:search-test'],
         capabilities: [
           'read',
-          'task-write',
-          'memory-write',
-          'prompt-write',
+          'task:write',
+          'memory:write',
+          'prompt:write',
           'search:admin',
           'admin',
         ],
         authorizationRevision: 1,
       };
+      let searchTick = Date.parse('2026-07-23T12:00:00.000Z');
       const search = await createWorkshopSearchIntegrationV1({
         db: workshopDb,
         taproot,
         hostCapability,
         installationId,
         registrationContext: context,
+        clock: () => new Date(searchTick),
       });
       for (const domain of [search.task, search.memory, search.prompt]) {
         await expect(
           domain.producer.adoptLegacyPage(context, { limit: 100 }),
         ).resolves.toMatchObject({ complete: true });
       }
-      const general = await createInstallationDomainMutationGuard(
-        db,
-        taproot,
-        hostCapability,
-        { domain: 'workshop.test', capability: 'read' },
-      );
       const authority: WorkshopAuthorizationAuthority = {
-        getInstallationAuthorizationState: () => general.readCurrentState(),
+        async getInstallationAuthorizationState() {
+          return {
+            installationId,
+            authorizationRevision: 1,
+            searchGeneration: 1,
+          };
+        },
         async commitTaskMutation<T>(
           _db: D1DatabaseLike,
           actor: AuthorizationContext,
           statement: D1PreparedStatementLike,
         ) {
-          if (!actor.capabilities.includes('task-write'))
+          if (!actor.capabilities.includes('task:write'))
             throw new Error('denied');
           return statement.first<T>();
         },
@@ -229,7 +231,7 @@ describe('Workshop external search producers', () => {
           actor: AuthorizationContext,
           statement: D1PreparedStatementLike,
         ) {
-          if (!actor.capabilities.includes('memory-write'))
+          if (!actor.capabilities.includes('memory:write'))
             throw new Error('denied');
           return statement.first<T>();
         },
@@ -240,7 +242,7 @@ describe('Workshop external search producers', () => {
           return _db.batch([...statements]);
         },
         async commitCursorSnapshot(_db, actor, _state, statements) {
-          await general.batchWithExpectedRevision(actor, statements);
+          if (!actor.capabilities.includes('read')) throw new Error('denied');
           return _db.batch([...statements]);
         },
       };
@@ -346,7 +348,6 @@ describe('Workshop external search producers', () => {
         policyRevision: 1,
         active: true,
       });
-      await search.materialization.startShadowRebuild(context);
       let completed = 0;
       for (let page = 0; page < 10; page += 1) {
         const receipt = await search.materialization.run(context, {
@@ -354,13 +355,13 @@ describe('Workshop external search producers', () => {
           maxRebuildRoots: 20,
         });
         completed += receipt.completed;
+        searchTick += 60_000;
       }
       expect(completed).toBeGreaterThanOrEqual(1);
       await search.materialization.run(context, {
         maxJobs: 20,
         maxRebuildRoots: 20,
       });
-      await search.materialization.activateReadyShadow(context);
       const first = await search.search(
         { text: 'overlapping work', kinds: ['prompt'], limit: 10 },
         context,

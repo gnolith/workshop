@@ -151,9 +151,9 @@ describe('Workshop authorization foundation', () => {
     const genericAdmin = context({ capabilities: ['admin'] });
     for (const capability of [
       'read',
-      'task-write',
-      'memory-write',
-      'knowledge-write',
+      'task:write',
+      'memory:write',
+      'knowledge:write',
       'search:admin',
     ] as const) {
       expect(() => authorize(genericAdmin, capability)).toThrow(
@@ -540,7 +540,7 @@ describe('Workshop authorization foundation', () => {
     });
   });
 
-  it('requires exact task-write plus admin to reset an abandoned claim', async () => {
+  it('requires exact task:write plus admin to reset an abandoned claim', async () => {
     const { core } = await setup();
     const created = await core.tasks.create(
       { description: 'Abandoned', prompt: 'Reset deliberately' },
@@ -559,14 +559,14 @@ describe('Workshop authorization foundation', () => {
       core.tasks.resetAbandonedClaim(
         created.id,
         cutoff,
-        context({ capabilities: ['task-write'] }),
+        context({ capabilities: ['task:write'] }),
       ),
     ).rejects.toMatchObject({ code: 'forbidden' });
     await expect(
       core.tasks.resetAbandonedClaim(
         created.id,
         cutoff,
-        context({ capabilities: ['task-write', 'admin'] }),
+        context({ capabilities: ['task:write', 'admin'] }),
       ),
     ).resolves.toMatchObject({ id: created.id, claimed: false });
   });

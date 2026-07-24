@@ -38,7 +38,7 @@ import {
 import {
   commitWorkshopCanonicalSearchMutationV1,
   type WorkshopSearchDomainV1,
-} from './search.js';
+} from './canonical-producer.js';
 import {
   isoDate,
   memorySlug,
@@ -271,7 +271,7 @@ export class MemoryService {
     input: UpsertMemoryInput,
     authorization: AuthorizationContext,
   ): Promise<Memory> {
-    const context = await this.#context(authorization, 'memory-write');
+    const context = await this.#context(authorization, 'memory:write');
     const workspaceId = requireActiveWorkspace(context);
     const slug = memorySlug(slugValue);
     const description = requiredText(
@@ -462,7 +462,7 @@ export class MemoryService {
     authorization: AuthorizationContext,
     idempotencyKey: string,
   ): Promise<Memory> {
-    const context = await this.#context(authorization, 'memory-write');
+    const context = await this.#context(authorization, 'memory:write');
     const key = requiredText(idempotencyKey, 'idempotencyKey', 256);
     const workspaceId = requireActiveWorkspace(context);
     const storedIdempotencyKey = `${workspaceId}\u0000${context.principalId}\u0000${key}`;
@@ -621,7 +621,7 @@ export class MemoryService {
     expectedRevision: number,
     authorization: AuthorizationContext,
   ): Promise<void> {
-    const context = await this.#context(authorization, 'memory-write');
+    const context = await this.#context(authorization, 'memory:write');
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
       throw validation('expectedRevision must be a positive safe integer');
     const slug = memorySlug(slugValue);
@@ -761,16 +761,7 @@ export class MemoryService {
     slug: string,
     context: AuthorizationContext,
   ): Promise<{ eventId: string; sequence: number }> {
-    const row = await this.db
-      .prepare(
-        `SELECT current_event_id AS event_id, current_event_sequence AS sequence
-         FROM taproot_unified_search_source_registry
-         WHERE installation_id = ? AND source_kind = 'memory' AND source_id = ?`,
-      )
-      .bind(context.installationId, slug)
-      .first<{ event_id: string; sequence: number }>();
-    if (!row || !Number.isSafeInteger(Number(row.sequence))) throw denied();
-    return { eventId: row.event_id, sequence: Number(row.sequence) };
+    return this.#search().currentPredecessor(slug, context);
   }
 
   #revisionStatement(
@@ -831,7 +822,7 @@ export class MemoryService {
 
   async #context(
     authorization: AuthorizationContext,
-    capability: 'read' | 'memory-write' = 'read',
+    capability: 'read' | 'memory:write' = 'read',
   ): Promise<AuthorizationContext> {
     const context = await requireCurrentAuthorization(
       this.options.authorization,

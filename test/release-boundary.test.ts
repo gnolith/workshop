@@ -22,7 +22,7 @@ describe('Workshop package release boundary', () => {
       assertPublishDryRunBoundary({
         status: 0,
         output:
-          `@gnolith/taproot 0.4.0 public npm provenance verified\n` +
+          `@gnolith/taproot 0.5.0 candidate integrity verified\n` +
           `release artifact validated for ${tag} at ${head} (digest)\n`,
         tag,
         head,
@@ -37,7 +37,7 @@ describe('Workshop package release boundary', () => {
       assertPublishDryRunBoundary({
         status: 1,
         output:
-          '@gnolith/taproot 0.4.0 public npm provenance verified\n' +
+          '@gnolith/taproot 0.5.0 candidate integrity verified\n' +
           `fatal: ambiguous argument 'refs/tags/${tag}': unknown revision or path not in the working tree.\n`,
         tag,
         head,

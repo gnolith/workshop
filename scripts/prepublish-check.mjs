@@ -25,8 +25,8 @@ function main() {
   const output = `${result.stdout}${result.stderr}`;
   assert.match(
     output,
-    /@gnolith\/taproot 0\.4\.0 public npm provenance verified/u,
-    'Taproot provenance verification did not complete before publication stopped',
+    /@gnolith\/taproot 0\.5\.0 candidate integrity verified/u,
+    'Taproot candidate verification did not complete before publication stopped',
   );
   assert.doesNotMatch(
     output,

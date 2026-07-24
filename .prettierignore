@@ -1,5 +1,2 @@
-node_modules/
-dist/
-coverage/
-.wrangler/
-*.tgz
+src/generated/**
+schemas/*.json

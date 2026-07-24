@@ -53,7 +53,7 @@ export async function createTestContext() {
       _context: WorkshopPrincipal,
       mutation: import('../src/server/database.js').D1PreparedStatementLike,
     ) {
-      if (!_context.capabilities.includes('task-write'))
+      if (!_context.capabilities.includes('task:write'))
         throw new WorkshopError('forbidden', 'Authorization denied');
       return mutation.first<T>();
     },
@@ -62,7 +62,7 @@ export async function createTestContext() {
       _context: WorkshopPrincipal,
       mutation: import('../src/server/database.js').D1PreparedStatementLike,
     ) {
-      if (!_context.capabilities.includes('memory-write'))
+      if (!_context.capabilities.includes('memory:write'))
         throw new WorkshopError('forbidden', 'Authorization denied');
       return mutation.first<T>();
     },
@@ -202,11 +202,11 @@ function principalFor(request: Request): WorkshopPrincipal | null {
       principalId: 'agent:full',
       capabilities: [
         'read',
-        'task-write',
-        'knowledge-write',
-        'memory-write',
+        'task:write',
+        'knowledge:write',
+        'memory:write',
         'admin',
-        'prompt-write',
+        'prompt:write',
         'search:admin',
       ],
     };
@@ -217,10 +217,10 @@ function principalFor(request: Request): WorkshopPrincipal | null {
       principalId: 'agent:writer',
       capabilities: [
         'read',
-        'task-write',
-        'knowledge-write',
-        'memory-write',
-        'prompt-write',
+        'task:write',
+        'knowledge:write',
+        'memory:write',
+        'prompt:write',
       ],
     };
   }
@@ -241,11 +241,11 @@ export const TEST_AUTHORIZATION: WorkshopPrincipal = {
   workspaceIds: ['workspace:test'],
   capabilities: [
     'read',
-    'task-write',
-    'knowledge-write',
-    'memory-write',
+    'task:write',
+    'knowledge:write',
+    'memory:write',
     'admin',
-    'prompt-write',
+    'prompt:write',
     'search:admin',
   ],
   authorizationRevision: 1,

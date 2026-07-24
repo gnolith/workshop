@@ -38,7 +38,7 @@ import {
 import {
   commitWorkshopCanonicalSearchMutationV1,
   type WorkshopSearchDomainV1,
-} from './search.js';
+} from './canonical-producer.js';
 import { pageLimit, requiredText, validation } from './validation.js';
 
 interface PromptRow {
@@ -235,7 +235,7 @@ export class PromptService {
     input: CreatePromptInput,
     authorization: AuthorizationContext,
   ): Promise<Prompt> {
-    const context = await this.#context(authorization, 'prompt-write');
+    const context = await this.#context(authorization, 'prompt:write');
     const workspaceId = requireActiveWorkspace(context);
     const now = this.#clock().toISOString();
     const id = input.id ? requiredText(input.id, 'id', 256) : this.#createId();
@@ -330,7 +330,7 @@ export class PromptService {
     input: UpdatePromptInput,
     authorization: AuthorizationContext,
   ): Promise<Prompt> {
-    const context = await this.#context(authorization, 'prompt-write');
+    const context = await this.#context(authorization, 'prompt:write');
     validateRevision(input.expectedRevision);
     const current = await this.#getForMutation(id, context);
     if (current.revision !== input.expectedRevision)
@@ -457,7 +457,7 @@ export class PromptService {
     expectedRevision: number,
     authorization: AuthorizationContext,
   ): Promise<void> {
-    const context = await this.#context(authorization, 'prompt-write');
+    const context = await this.#context(authorization, 'prompt:write');
     validateRevision(expectedRevision);
     const current = await this.#getForMutation(id, context);
     if (current.revision !== expectedRevision)
@@ -563,21 +563,7 @@ export class PromptService {
     id: string,
     context: AuthorizationContext,
   ): Promise<{ eventId: string; sequence: number }> {
-    const row = await this.db
-      .prepare(
-        `SELECT current_event_id AS search_event_id,
-                current_event_sequence AS search_event_sequence
-         FROM taproot_unified_search_source_registry
-         WHERE installation_id = ? AND source_kind = 'prompt' AND source_id = ?`,
-      )
-      .bind(context.installationId, id)
-      .first<Pick<PromptRow, 'search_event_id' | 'search_event_sequence'>>();
-    if (!row?.search_event_id || row.search_event_sequence === null)
-      throw denied();
-    return {
-      eventId: row.search_event_id,
-      sequence: row.search_event_sequence,
-    };
+    return this.options.search.currentPredecessor(id, context);
   }
 
   async #row(idValue: string, context: AuthorizationContext) {
@@ -626,7 +612,7 @@ export class PromptService {
 
   async #context(
     authorization: AuthorizationContext,
-    capability: 'read' | 'prompt-write' = 'read',
+    capability: 'read' | 'prompt:write' = 'read',
   ): Promise<AuthorizationContext> {
     const context = await requireCurrentAuthorization(
       this.options.authorization,

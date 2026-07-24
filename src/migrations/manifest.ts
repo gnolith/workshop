@@ -1,10 +1,10 @@
 export interface WorkshopMigration {
   id: string;
-  checksum: string;
+  checksum: `sha256:${string}`;
   sql: string;
 }
 
-export const WORKSHOP_SCHEMA_VERSION = 6;
+export const WORKSHOP_SCHEMA_VERSION = 8;
 
 export const workshopMigrations: readonly WorkshopMigration[] = [
   {
@@ -430,11 +430,105 @@ SET version = 6,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
+  {
+    id: '0007_task_leases',
+    checksum:
+      'sha256:c617200d9c0b0cc629e738937b7a08ed2e1a29a6be3d99a1835d6bb2b47a1b69',
+    sql: `ALTER TABLE workshop_tasks ADD COLUMN lease_id TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN lease_token_digest TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN lease_owner_principal_id TEXT;
+ALTER TABLE workshop_tasks ADD COLUMN lease_expires_at TEXT;
+
+CREATE TABLE workshop_task_lease_receipts (
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (operation IN ('release', 'complete')),
+  expected_revision INTEGER NOT NULL CHECK (expected_revision >= 1),
+  resulting_revision INTEGER NOT NULL CHECK (resulting_revision >= 1),
+  receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, principal_id, idempotency_key)
+);
+
+CREATE TABLE workshop_task_lease_events (
+  event_id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  lease_id TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  event_kind TEXT NOT NULL CHECK (
+    event_kind IN ('claimed', 'reclaimed_expired', 'released', 'completed')
+  ),
+  task_revision INTEGER NOT NULL CHECK (task_revision >= 1),
+  lease_expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX workshop_tasks_lease_expiry_idx
+  ON workshop_tasks (installation_id, lease_expires_at, id);
+CREATE INDEX workshop_task_lease_events_task_idx
+  ON workshop_task_lease_events (installation_id, task_id, created_at);
+
+UPDATE workshop_schema
+SET version = 7,
+    package_version = '0.5.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
+  {
+    id: '0008_bootstrap_credentials',
+    checksum:
+      'sha256:319aacd693f45d8b906fd25932f75253629ebe58fc0037f0e341be7baafd31a3',
+    sql: `CREATE TABLE workshop_credentials (
+  installation_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  profile TEXT NOT NULL CHECK (profile = 'local-bearer-v1'),
+  token_digest TEXT NOT NULL CHECK (
+    length(token_digest) = 64 AND token_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  principal_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, credential_id),
+  UNIQUE (installation_id, token_digest)
+);
+
+CREATE INDEX workshop_credentials_principal_idx
+  ON workshop_credentials (installation_id, principal_id, workspace_id);
+
+CREATE TABLE workshop_bootstrap_receipts (
+  installation_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  grant_manifest_digest TEXT NOT NULL CHECK (
+    length(grant_manifest_digest) = 64
+    AND grant_manifest_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  owner_receipt_json TEXT NOT NULL CHECK (json_valid(owner_receipt_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, idempotency_key),
+  FOREIGN KEY (installation_id, credential_id)
+    REFERENCES workshop_credentials(installation_id, credential_id)
+);
+
+UPDATE workshop_schema
+SET version = 8,
+    package_version = '0.5.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
 ] as const;
 
 export const expectedWorkshopTables = [
   'workshop_cursor_entries',
   'workshop_cursor_snapshots',
+  'workshop_bootstrap_receipts',
+  'workshop_credentials',
   'workshop_memory_revisions',
   'workshop_memories',
   'workshop_onboarding_runs',
@@ -443,11 +537,14 @@ export const expectedWorkshopTables = [
   'workshop_prompts',
   'workshop_schema',
   'workshop_task_revisions',
+  'workshop_task_lease_events',
+  'workshop_task_lease_receipts',
   'workshop_tasks',
 ] as const;
 
 export const expectedWorkshopIndexes = [
   'workshop_cursor_snapshots_expiry_idx',
+  'workshop_credentials_principal_idx',
   'workshop_memory_revisions_history_idx',
   'workshop_memories_authorization_idx',
   'workshop_memories_idempotency_idx',
@@ -458,6 +555,8 @@ export const expectedWorkshopIndexes = [
   'workshop_prompts_authorization_idx',
   'workshop_prompts_list_idx',
   'workshop_task_revisions_history_idx',
+  'workshop_task_lease_events_task_idx',
+  'workshop_tasks_lease_expiry_idx',
   'workshop_tasks_role_idx',
   'workshop_tasks_authorization_idx',
   'workshop_tasks_state_idx',
