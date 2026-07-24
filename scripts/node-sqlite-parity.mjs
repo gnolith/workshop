@@ -12,7 +12,7 @@ try {
     'DIAMOND_TARBALL',
     resolve('..', 'diamond', 'gnolith-diamond-0.5.0.tgz'),
     process.env.DIAMOND_TARBALL_SHA256 ??
-      'df6c1aa3703b35016156fb40926dd1aac4fb8d946128826a94b775dec67eb303',
+      '3ce5d33478667dc4ec9a8ae4b4c3e0a94c3bce61e741ba62511ab668d1c20228',
   );
   const taprootTarball = artifact(
     'TAPROOT_TARBALL',
