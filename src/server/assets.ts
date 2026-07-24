@@ -97,7 +97,7 @@ export async function verifyWaystoneAssetMount(input: {
       let normalized: string;
       try {
         const suffix =
-          pathname === prefix
+          pathname === prefix || pathname === `${prefix}/`
             ? manifest.entrypoint
             : decodeURIComponent(pathname.slice(prefix.length + 1));
         normalized = normalizeAssetPath(suffix);

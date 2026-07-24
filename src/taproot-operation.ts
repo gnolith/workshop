@@ -54,6 +54,7 @@ export interface WorkshopTaprootAssemblyOptionsV1 {
   maxHydratedResourceBytes?: number;
   semantic?: SemanticSearchAdminV1;
   search?: WorkshopAuthorizedSearchServiceV1;
+  materialization?: SearchMaterializationAdminGuardV1;
   authorizationAdministration?: WorkshopAuthorizationAdministrationV1;
   status(
     context: AuthorizationContext,
@@ -101,12 +102,16 @@ export async function createWorkshopTaprootOperationPortV1(
           content,
           ...(options.semantic ? { semantic: options.semantic } : {}),
         }),
-    materialization: await createSearchMaterializationAdminGuardV1(
-      options.db,
-      options.taprootOptions,
-      options.hostAuthority,
-      options.payloadStore ? { payloadStore: options.payloadStore } : undefined,
-    ),
+    materialization:
+      options.materialization ??
+      (await createSearchMaterializationAdminGuardV1(
+        options.db,
+        options.taprootOptions,
+        options.hostAuthority,
+        options.payloadStore
+          ? { payloadStore: options.payloadStore }
+          : undefined,
+      )),
     authorizationAdministration:
       options.authorizationAdministration ??
       (await createWorkshopAuthorizationAdministrationV1({
@@ -409,14 +414,23 @@ async function searchAdministration(
           ? await options.semantic.status(context)
           : { state: 'unconfigured' },
       };
-    case 'materialize':
-      return runtime.materialization.run(context, {
+    case 'materialize': {
+      const receipt = await runtime.materialization.run(context, {
         maxJobs: limit,
         maxRebuildRoots: optionalInteger(values.maxRebuildRoots, limit),
         ...(typeof values.maxChunkBytes === 'number'
           ? { maxChunkBytes: values.maxChunkBytes }
           : {}),
       });
+      return {
+        claimed: receipt.claimed,
+        completed: receipt.completed,
+        superseded: receipt.superseded,
+        deferred: receipt.deferred,
+        dead: receipt.dead,
+        rebuildRootsEnumerated: receipt.rebuildRootsEnumerated,
+      };
+    }
     case 'retry-dead':
       return {
         retried: await runtime.materialization.retryDead(context, { limit }),

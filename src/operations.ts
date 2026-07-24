@@ -201,7 +201,6 @@ export function createOperationRuntime(
           throw new WorkshopError('not_found', 'Operation not found', 404);
         if (!input || typeof input !== 'object' || Array.isArray(input))
           throw invalid('Operation input must be an object');
-        rejectForgedIdentity(input);
         const validate = validators.get(name);
         if (!validate?.(input))
           throw new WorkshopError(
@@ -210,6 +209,7 @@ export function createOperationRuntime(
             400,
             { operation: name, errors: boundedAjvErrors(validate?.errors) },
           );
+        rejectForgedIdentity(name, input);
         live = await options.taproot.recheckPrincipal(
           context.principal,
           context.signal,
@@ -321,7 +321,14 @@ function validatorsForCatalog(): Map<string, ValidateFunction> {
   return validators;
 }
 
-function rejectForgedIdentity(input: Readonly<Record<string, unknown>>): void {
+function rejectForgedIdentity(
+  name: OperationName,
+  input: Readonly<Record<string, unknown>>,
+): void {
+  // Authorization administration targets are part of this operation's sealed,
+  // schema-validated command. They identify the object being administered and
+  // never replace the authenticated caller in OperationCallContext.
+  if (name === 'authorization_admin') return;
   for (const key of Object.keys(input)) {
     if (IDENTITY_ARGUMENTS.has(key))
       throw invalid('Identity and authorization are transport-owned');

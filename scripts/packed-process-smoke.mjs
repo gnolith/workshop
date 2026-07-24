@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers';
@@ -318,6 +318,74 @@ export async function createWorkshopSemanticConfigurationDependencies(
     lagged.sourceHighWatermark > lagged.activeAppliedWatermark,
     JSON.stringify(lagged),
   );
+  const materialized = await mcp(origin, token, 11, 'tools/call', {
+    name: 'search_admin',
+    arguments: {
+      action: 'materialize',
+      limit: 100,
+      options: { maxRebuildRoots: 100 },
+    },
+  });
+  assert.equal(
+    materialized.result?.isError,
+    false,
+    JSON.stringify(materialized),
+  );
+  assert.ok(
+    materialized.result.structuredContent.completed >= 1,
+    JSON.stringify(materialized),
+  );
+  const materializedReplay = await mcp(origin, token, 12, 'tools/call', {
+    name: 'search_admin',
+    arguments: {
+      action: 'materialize',
+      limit: 100,
+      options: { maxRebuildRoots: 100 },
+    },
+  });
+  assert.equal(
+    materializedReplay.result?.isError,
+    false,
+    JSON.stringify(materializedReplay),
+  );
+  assert.equal(materializedReplay.result.structuredContent.completed, 0);
+  const caughtUpHealth = await mcp(origin, token, 13, 'tools/call', {
+    name: 'search_admin',
+    arguments: { action: 'health' },
+  });
+  assert.equal(
+    caughtUpHealth.result.structuredContent.materialization
+      .activeAppliedWatermark,
+    caughtUpHealth.result.structuredContent.materialization.sourceHighWatermark,
+  );
+  const secondCreated = await mcp(origin, token, 14, 'tools/call', {
+    name: 'create_item',
+    arguments: {
+      idempotencyKey: 'packed-restart-item-v2',
+      authoredText: 'Create a second item to prove restart catch-up.',
+      data: {
+        id: 'Q2',
+        labels: {
+          en: { language: 'en', value: 'Packed restart item two' },
+        },
+      },
+    },
+  });
+  assert.equal(
+    secondCreated.result?.isError,
+    false,
+    JSON.stringify(secondCreated),
+  );
+  const secondLaggedHealth = await mcp(origin, token, 15, 'tools/call', {
+    name: 'search_admin',
+    arguments: { action: 'health' },
+  });
+  const secondLagged =
+    secondLaggedHealth.result.structuredContent.materialization;
+  assert.ok(
+    secondLagged.sourceHighWatermark > secondLagged.activeAppliedWatermark,
+    JSON.stringify(secondLagged),
+  );
   const laggedStatus = await mcp(origin, token, 10, 'tools/call', {
     name: 'gnolith_status',
     arguments: {},
@@ -328,7 +396,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
     JSON.stringify(laggedStatus),
   );
   assert.equal(laggedStatus.result.structuredContent.lexicalReady, false);
-  const corpusGeneration = lagged.activeCorpusGeneration;
+  const corpusGeneration = secondLagged.activeCorpusGeneration;
   await terminate(child);
   child = spawn(
     process.execPath,
@@ -382,9 +450,26 @@ export async function createWorkshopSemanticConfigurationDependencies(
   });
   const app = await fetch(`${origin}/app`);
   assert.equal(app.status, 200);
-  assert.match(await app.text(), /Packed Waystone/u);
+  const appBytes = Buffer.from(await app.arrayBuffer());
+  assert.match(appBytes.toString('utf8'), /Packed Waystone/u);
+  const slashApp = await fetch(`${origin}/app/`);
+  assert.equal(slashApp.status, 200);
+  assert.equal(
+    slashApp.headers.get('content-type'),
+    app.headers.get('content-type'),
+  );
+  assert.deepEqual(Buffer.from(await slashApp.arrayBuffer()), appBytes);
   assert.equal((await fetch(`${origin}/`)).status, 404);
   assert.equal((await fetch(`${origin}/app/%2e%2e/secret`)).status, 404);
+  for (const target of [
+    '/app/%2e%2e/mcp',
+    '/app/%2E%2E/health/live',
+    '/app%2f..%2fmcp',
+  ]) {
+    const response = await rawHttp(port, target);
+    assert.match(response.statusLine, / 400 /u, target);
+    assert.match(response.body, /bad_request/u, target);
+  }
   const initialize = await fetch(`${origin}/mcp`, {
     method: 'POST',
     headers: {
@@ -500,6 +585,29 @@ async function availablePort() {
     server.close((error) => (error ? reject(error) : resolvePromise())),
   );
   return address.port;
+}
+
+async function rawHttp(port, target) {
+  const response = await new Promise((resolvePromise, rejectPromise) => {
+    const socket = connect(port, '127.0.0.1');
+    let value = '';
+    socket.setEncoding('utf8');
+    socket.once('error', rejectPromise);
+    socket.on('data', (chunk) => {
+      value += String(chunk);
+    });
+    socket.once('end', () => resolvePromise(value));
+    socket.once('connect', () => {
+      socket.end(
+        `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+    });
+  });
+  const separator = response.indexOf('\r\n\r\n');
+  return {
+    statusLine: response.slice(0, response.indexOf('\r\n')),
+    body: separator < 0 ? '' : response.slice(separator + 4),
+  };
 }
 
 async function waitForLive(origin, processHandle) {

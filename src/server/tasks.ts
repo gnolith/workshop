@@ -160,6 +160,7 @@ export class TaskService {
   readonly #limits: WorkshopLimits;
   readonly #clock: () => Date;
   readonly #createId: () => string;
+  readonly #taskMutationTails = new Map<string, Promise<void>>();
 
   constructor(
     readonly db: D1DatabaseLike,
@@ -849,44 +850,55 @@ export class TaskService {
         'leaseSeconds must be an integer between 1 and 86400',
         400,
       );
-    const context = await this.#context(authorization, 'task:write');
-    const predicate = visibilitySql('workshop_tasks', context);
-    const now = this.#clock();
-    const claimedAt = now.toISOString();
-    const expiresAt = new Date(
-      now.getTime() + leaseSeconds * 1000,
-    ).toISOString();
-    const leaseId = this.#createId();
-    const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
-    const leaseToken = base64url(tokenBytes);
-    const tokenDigest = await digestLeaseToken(tokenBytes);
-    tokenBytes.fill(0);
-    const priorLease = await this.db
-      .prepare(
-        `SELECT lease_id, lease_expires_at FROM workshop_tasks
+    return this.#serializeTaskMutation(id, async () => {
+      const context = await this.#context(authorization, 'task:write');
+      const predicate = visibilitySql('workshop_tasks', context);
+      const now = this.#clock();
+      const claimedAt = now.toISOString();
+      const expiresAt = new Date(
+        now.getTime() + leaseSeconds * 1000,
+      ).toISOString();
+      const leaseId = this.#createId();
+      const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+      const leaseToken = base64url(tokenBytes);
+      const tokenDigest = await digestLeaseToken(tokenBytes);
+      tokenBytes.fill(0);
+      const priorLease = await this.db
+        .prepare(
+          `SELECT lease_id, lease_expires_at FROM workshop_tasks
          WHERE id = ? AND installation_id = ?`,
+        )
+        .bind(id, context.installationId)
+        .first<{ lease_id: string | null; lease_expires_at: string | null }>();
+      const eventId = this.#createId();
+      const current = await this.#getForMutation(id, context);
+      if (
+        priorLease?.lease_id &&
+        priorLease.lease_expires_at &&
+        priorLease.lease_expires_at > claimedAt
       )
-      .bind(id, context.installationId)
-      .first<{ lease_id: string | null; lease_expires_at: string | null }>();
-    const eventId = this.#createId();
-    const current = await this.#getForMutation(id, context);
-    const next: Task = {
-      ...current,
-      claimed: true,
-      claimedAt: nextTimestamp(claimedAt, current.updatedAt),
-      revision: current.revision + 1,
-      updatedAt: nextTimestamp(claimedAt, current.updatedAt),
-      authorizationRevision: context.authorizationRevision,
-    };
-    let row: TaskRow | null;
-    try {
-      row = await this.#commitCanonical(
-        context,
-        next,
-        'task.state',
-        await this.#predecessor(id, context),
-        {
-          sql: `UPDATE workshop_tasks
+        throw new WorkshopError(
+          'conflict',
+          'Task is unavailable or has an active lease',
+          409,
+        );
+      const next: Task = {
+        ...current,
+        claimed: true,
+        claimedAt: nextTimestamp(claimedAt, current.updatedAt),
+        revision: current.revision + 1,
+        updatedAt: nextTimestamp(claimedAt, current.updatedAt),
+        authorizationRevision: context.authorizationRevision,
+      };
+      let row: TaskRow | null;
+      try {
+        row = await this.#commitCanonical(
+          context,
+          next,
+          'task.state',
+          await this.#predecessor(id, context),
+          {
+            sql: `UPDATE workshop_tasks
            SET claimed = 1, claimed_at = ?, lease_id = ?,
                lease_token_digest = ?, lease_owner_principal_id = ?,
                lease_expires_at = ?, revision = revision + 1,
@@ -896,70 +908,71 @@ export class TaskService {
              AND (lease_id IS NULL OR lease_expires_at <= ?)
              AND ${predicate.sql}
            RETURNING *`,
-          values: [
-            next.claimedAt,
-            leaseId,
-            tokenDigest,
-            context.principalId,
-            expiresAt,
-            context.authorizationRevision,
-            next.updatedAt,
-            eventId,
-            id,
-            current.revision,
-            claimedAt,
-            ...predicate.values,
-          ],
-        },
-        eventId,
-        [
-          {
-            sql: `INSERT INTO workshop_task_lease_events
+            values: [
+              next.claimedAt,
+              leaseId,
+              tokenDigest,
+              context.principalId,
+              expiresAt,
+              context.authorizationRevision,
+              next.updatedAt,
+              eventId,
+              id,
+              current.revision,
+              claimedAt,
+              ...predicate.values,
+            ],
+          },
+          eventId,
+          [
+            {
+              sql: `INSERT INTO workshop_task_lease_events
            (event_id, installation_id, task_id, lease_id, actor_principal_id,
             event_kind, task_revision, lease_expires_at, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            values: [
-              eventId,
-              context.installationId,
-              id,
-              leaseId,
-              context.principalId,
-              priorLease?.lease_id &&
-              priorLease.lease_expires_at &&
-              priorLease.lease_expires_at <= claimedAt
-                ? 'reclaimed_expired'
-                : 'claimed',
-              next.revision,
-              expiresAt,
-              claimedAt,
-            ],
-          },
-        ],
-      );
-    } catch (error) {
-      if (
-        await this.#claimRaceLost(
-          id,
-          context.installationId,
-          current.revision,
-          claimedAt,
-          error,
+              values: [
+                eventId,
+                context.installationId,
+                id,
+                leaseId,
+                context.principalId,
+                priorLease?.lease_id &&
+                priorLease.lease_expires_at &&
+                priorLease.lease_expires_at <= claimedAt
+                  ? 'reclaimed_expired'
+                  : 'claimed',
+                next.revision,
+                expiresAt,
+                claimedAt,
+              ],
+            },
+          ],
+        );
+      } catch (error) {
+        if (
+          await this.#claimRaceLost(
+            id,
+            context.installationId,
+            current.revision,
+            claimedAt,
+            error,
+          )
         )
-      )
+          throw new WorkshopError(
+            'conflict',
+            'Task is unavailable or has an active lease',
+            409,
+          );
+        throw error;
+      }
+      if (!row)
         throw new WorkshopError(
           'conflict',
           'Task is unavailable or has an active lease',
           409,
         );
-      throw error;
-    }
-    if (!row)
-      throw new WorkshopError(
-        'conflict',
-        'Task is unavailable or has an active lease',
-        409,
-      );
-    return { task: toTask(row), leaseId, leaseToken, expiresAt };
+      return { task: toTask(row), leaseId, leaseToken, expiresAt };
+    });
   }
 
   async #claimRaceLost(
@@ -1726,6 +1739,23 @@ export class TaskService {
       },
       execute,
     );
+  }
+
+  #serializeTaskMutation<T>(
+    taskId: string,
+    execute: () => Promise<T>,
+  ): Promise<T> {
+    const prior = this.#taskMutationTails.get(taskId) ?? Promise.resolve();
+    const current = prior.catch(() => undefined).then(execute);
+    const tail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#taskMutationTails.set(taskId, tail);
+    return current.finally(() => {
+      if (this.#taskMutationTails.get(taskId) === tail)
+        this.#taskMutationTails.delete(taskId);
+    });
   }
 
   async #context(

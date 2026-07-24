@@ -24,6 +24,13 @@
 - Added public bounded local-filesystem ResourceBlob backup/restore ports with
   private content-addressed paths, verified staging, collision checks, rebinds,
   rollback, and symlink/traversal defenses.
+- Made owner restore collision-safe and repeatable on a fresh current target,
+  preserving one canonical copy of task idempotency receipts, revisions, and
+  outcomes while rejecting inconsistent duplicates.
+- Distinguished schema-declared authorization administration targets from the
+  transport-authenticated caller, serialized manual and automatic search
+  materialization, fenced simultaneous task claims, and rejected encoded
+  asset traversal before Node URL normalization.
 - Removed legacy operation aliases, UI and CSS exports, Site route factories,
   stdio transport, and the parallel hand-written MCP catalog.
 

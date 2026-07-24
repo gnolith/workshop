@@ -161,9 +161,126 @@ const WORKSHOP_BACKUP_QUERIES = [
     'workshop_operation_receipts',
     'SELECT * FROM workshop_operation_receipts WHERE installation_id = ?',
   ],
+  [
+    'workshop_authorization_principals',
+    'SELECT * FROM workshop_authorization_principals WHERE installation_id = ?',
+  ],
+  [
+    'workshop_workspace_memberships',
+    'SELECT * FROM workshop_workspace_memberships WHERE installation_id = ?',
+  ],
+  [
+    'workshop_oauth_bindings',
+    'SELECT * FROM workshop_oauth_bindings WHERE installation_id = ?',
+  ],
+  [
+    'workshop_authorization_admin_receipts',
+    'SELECT * FROM workshop_authorization_admin_receipts WHERE installation_id = ?',
+  ],
+  [
+    'workshop_authorization_audit',
+    'SELECT * FROM workshop_authorization_audit WHERE installation_id = ?',
+  ],
+  [
+    'workshop_semantic_configuration_state',
+    'SELECT * FROM workshop_semantic_configuration_state WHERE installation_id = ?',
+  ],
+  [
+    'workshop_semantic_configuration_receipts',
+    'SELECT * FROM workshop_semantic_configuration_receipts WHERE installation_id = ?',
+  ],
 ] as const;
 
 const SQL_IDENTIFIER = /^[a-z][a-z0-9_]*$/u;
+
+const RESTORE_DELETE_QUERIES = [
+  `DELETE FROM workshop_onboarding_steps`,
+  `DELETE FROM workshop_onboarding_runs`,
+  `DELETE FROM workshop_cursor_entries
+   WHERE snapshot_id IN (
+     SELECT id FROM workshop_cursor_snapshots WHERE installation_id = ?
+   )`,
+  `DELETE FROM workshop_cursor_snapshots WHERE installation_id = ?`,
+  `DELETE FROM workshop_task_lease_receipts WHERE installation_id = ?`,
+  `DELETE FROM workshop_task_lease_events WHERE installation_id = ?`,
+  `DELETE FROM workshop_task_revisions
+   WHERE task_id IN (
+     SELECT id FROM workshop_tasks WHERE installation_id = ?
+   )`,
+  `DELETE FROM workshop_memory_revisions WHERE installation_id = ?`,
+  `DELETE FROM workshop_prompt_revisions WHERE installation_id = ?`,
+  `DELETE FROM workshop_operation_receipts WHERE installation_id = ?`,
+  `DELETE FROM workshop_bootstrap_receipts WHERE installation_id = ?`,
+  `DELETE FROM workshop_credentials WHERE installation_id = ?`,
+  `DELETE FROM workshop_authorization_admin_receipts WHERE installation_id = ?`,
+  `DELETE FROM workshop_authorization_audit WHERE installation_id = ?`,
+  `DELETE FROM workshop_oauth_bindings WHERE installation_id = ?`,
+  `DELETE FROM workshop_workspace_memberships WHERE installation_id = ?`,
+  `DELETE FROM workshop_authorization_principals WHERE installation_id = ?`,
+  `DELETE FROM workshop_semantic_configuration_receipts WHERE installation_id = ?`,
+  `DELETE FROM workshop_semantic_configuration_state WHERE installation_id = ?`,
+  `DELETE FROM workshop_prompts WHERE installation_id = ?`,
+  `DELETE FROM workshop_memories WHERE installation_id = ?`,
+  `DELETE FROM workshop_tasks WHERE installation_id = ?`,
+] as const;
+
+const BACKUP_UNIQUE_KEYS: Readonly<
+  Record<string, readonly (readonly string[])[]>
+> = {
+  workshop_onboarding_runs: [['key']],
+  workshop_onboarding_steps: [
+    ['run_key', 'ordinal'],
+    ['run_key', 'step_key'],
+  ],
+  workshop_tasks: [['id'], ['idempotency_key']],
+  workshop_task_revisions: [['task_id', 'revision'], ['event_id']],
+  workshop_memories: [
+    ['installation_id', 'slug'],
+    ['installation_id', 'idempotency_key'],
+  ],
+  workshop_memory_revisions: [
+    ['installation_id', 'memory_id', 'revision'],
+    ['event_id'],
+  ],
+  workshop_prompts: [
+    ['installation_id', 'id'],
+    ['installation_id', 'workspace_id', 'name'],
+  ],
+  workshop_prompt_revisions: [
+    ['installation_id', 'prompt_id', 'revision'],
+    ['event_id'],
+  ],
+  workshop_cursor_snapshots: [['id']],
+  workshop_cursor_entries: [
+    ['snapshot_id', 'ordinal'],
+    ['snapshot_id', 'record_id'],
+  ],
+  workshop_task_lease_receipts: [
+    ['installation_id', 'principal_id', 'idempotency_key'],
+  ],
+  workshop_task_lease_events: [['event_id']],
+  workshop_credentials: [
+    ['installation_id', 'credential_id'],
+    ['installation_id', 'token_digest'],
+  ],
+  workshop_bootstrap_receipts: [['installation_id', 'idempotency_key']],
+  workshop_operation_receipts: [
+    ['installation_id', 'principal_id', 'operation', 'idempotency_key'],
+  ],
+  workshop_authorization_principals: [['installation_id', 'principal_id']],
+  workshop_workspace_memberships: [
+    ['installation_id', 'principal_id', 'workspace_id'],
+  ],
+  workshop_oauth_bindings: [['installation_id', 'issuer', 'subject']],
+  workshop_authorization_admin_receipts: [
+    ['installation_id', 'actor_principal_id', 'idempotency_key'],
+  ],
+  workshop_authorization_audit: [['audit_id']],
+  workshop_semantic_configuration_state: [['installation_id']],
+  workshop_semantic_configuration_receipts: [
+    ['installation_id', 'actor_principal_id', 'idempotency_key'],
+  ],
+};
 
 /**
  * Creates sealed Workshop-owned backup handles around one qualified database
@@ -212,7 +329,9 @@ export function createWorkshopOwnerHandlesV1(
     ) {
       const { state, signal } = input;
       signal.throwIfAborted();
-      const decoded = ownedState(state, options.installationId);
+      const decoded = normalizeOwnedState(
+        ownedState(state, options.installationId),
+      );
       return Promise.resolve({
         taskCount: decoded.tables.workshop_tasks?.length ?? 0,
         memoryCount: decoded.tables.workshop_memories?.length ?? 0,
@@ -238,8 +357,13 @@ export function createWorkshopOwnerHandlesV1(
       signal.throwIfAborted();
       if (!Number.isFinite(Date.parse(expireTaskLeasesAt)))
         throw invalid('Task lease expiry is invalid');
-      const decoded = ownedState(state, installationId);
-      const statements: ReturnType<D1DatabaseLike['prepare']>[] = [];
+      const decoded = normalizeOwnedState(ownedState(state, installationId));
+      const statements: ReturnType<D1DatabaseLike['prepare']>[] =
+        RESTORE_DELETE_QUERIES.map((sql) =>
+          sql.includes('?')
+            ? options.db.prepare(sql).bind(installationId)
+            : options.db.prepare(sql),
+        );
       for (const [table] of WORKSHOP_BACKUP_QUERIES) {
         for (const row of decoded.tables[table] ?? []) {
           signal.throwIfAborted();
@@ -505,6 +629,61 @@ function ownedState(
       throw invalid('Workshop owner state contains invalid rows or columns');
   }
   return value as unknown as WorkshopOwnedStateV1;
+}
+
+function normalizeOwnedState(
+  state: WorkshopOwnedStateV1,
+): WorkshopOwnedStateV1 {
+  const tables: Record<string, readonly Record<string, unknown>[]> = {};
+  for (const [table] of WORKSHOP_BACKUP_QUERIES) {
+    const rows = state.tables[table] ?? [];
+    const uniqueKeys = BACKUP_UNIQUE_KEYS[table] ?? [];
+    const seen = new Map<string, string>();
+    const normalized: Record<string, unknown>[] = [];
+    for (const row of rows) {
+      const canonical = canonicalize(row);
+      const keys = uniqueKeys
+        .map((columns) => logicalKey(table, columns, row))
+        .filter((key): key is string => key !== null);
+      const collisions = keys
+        .map((key) => seen.get(key))
+        .filter((value): value is string => value !== undefined);
+      if (collisions.some((value) => value !== canonical))
+        throw invalid(
+          `Workshop owner state contains inconsistent duplicate ${table} records`,
+        );
+      if (collisions.length > 0) {
+        for (const key of keys) seen.set(key, canonical);
+        continue;
+      }
+      for (const key of keys) seen.set(key, canonical);
+      normalized.push({ ...row });
+    }
+    tables[table] = normalized;
+  }
+  return { ...state, tables };
+}
+
+function logicalKey(
+  table: string,
+  columns: readonly string[],
+  row: Readonly<Record<string, unknown>>,
+): string | null {
+  const values = columns.map((column) => row[column]);
+  if (values.some((value) => value === null || value === undefined))
+    return null;
+  return `${table}\u0000${columns.join('\u0000')}\u0000${canonicalize(values)}`;
+}
+
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value))
+    return `[${value.map((entry) => canonicalize(entry)).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`)
+    .join(',')}}`;
 }
 
 function rebindRow(

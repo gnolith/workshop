@@ -3,6 +3,7 @@ import {
   createAuthenticationVerifier,
   digestLocalBearerToken,
 } from '../src/server/auth.js';
+import { connect } from 'node:net';
 import {
   verifyWaystoneAssetMount,
   WORKSHOP_RECOMMENDED_ASSET_PREFIX,
@@ -126,7 +127,19 @@ describe('executable listener and authentication', () => {
     const app = await service.fetch(new Request('https://example.invalid/app'));
     expect(app.status).toBe(200);
     expect(app.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    await expect(app.text()).resolves.toContain('Waystone');
+    const appBody = await app.text();
+    expect(appBody).toContain('Waystone');
+    const slashApp = await service.fetch(
+      new Request('https://example.invalid/app/'),
+    );
+    expect(slashApp.status).toBe(200);
+    expect(slashApp.headers.get('content-type')).toBe(
+      app.headers.get('content-type'),
+    );
+    expect(slashApp.headers.get('content-length')).toBe(
+      app.headers.get('content-length'),
+    );
+    await expect(slashApp.text()).resolves.toBe(appBody);
     expect(
       (
         await service.fetch(
@@ -152,6 +165,31 @@ describe('executable listener and authentication', () => {
         )
       ).status,
     ).not.toBe(200);
+    const address = await service.start();
+    try {
+      for (const target of [
+        '/app/%2e%2e/mcp',
+        '/app/%2E%2E/health/live',
+        '/app%2f..%2fmcp',
+        '/app/%5c..%5chealth/live',
+      ]) {
+        const response = await rawHttp(address.port, target);
+        expect(response.statusLine, target).toContain(' 400 ');
+        expect(response.body, target).toContain('bad_request');
+      }
+      expect(
+        (await fetch(`http://127.0.0.1:${address.port}/health/live`)).status,
+      ).toBe(200);
+      expect(
+        (
+          await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+            method: 'GET',
+          })
+        ).status,
+      ).not.toBe(200);
+    } finally {
+      await service.stop();
+    }
 
     const baseConfig = {
       format: 'gnolith-workshop-config-v1',
@@ -384,6 +422,32 @@ function canonicalize(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`)
     .join(',')}}`;
+}
+
+async function rawHttp(
+  port: number,
+  target: string,
+): Promise<{ statusLine: string; body: string }> {
+  const response = await new Promise<string>((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1');
+    let value = '';
+    socket.setEncoding('utf8');
+    socket.once('error', reject);
+    socket.on('data', (chunk) => {
+      value += String(chunk);
+    });
+    socket.once('end', () => resolve(value));
+    socket.once('connect', () => {
+      socket.end(
+        `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+    });
+  });
+  const separator = response.indexOf('\r\n\r\n');
+  return {
+    statusLine: response.slice(0, response.indexOf('\r\n')),
+    body: separator < 0 ? '' : response.slice(separator + 4),
+  };
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {

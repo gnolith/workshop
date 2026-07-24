@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWorkshopCore } from '../src/server/context.js';
+import type { TaskLeaseClaim } from '../src/server/tasks.js';
 import { createTestContext, TEST_AUTHORIZATION } from './helpers.js';
 
 const disposals: Array<() => Promise<void>> = [];
@@ -181,6 +182,44 @@ describe('task leases', () => {
     expect(rejected).toMatchObject({
       status: 'rejected',
       reason: { code: 'conflict', status: 409 },
+    });
+    const winner = results.find(
+      (result): result is PromiseFulfilledResult<TaskLeaseClaim> =>
+        result.status === 'fulfilled',
+    )!.value;
+    const completion = {
+      taskId: task.id,
+      leaseToken: winner.leaseToken,
+      expectedRevision: winner.task.revision,
+      idempotencyKey: 'race-winner-completion',
+      result: 'completed on the first attempt',
+      outcomeKind: 'success',
+    };
+    const completed = await context.runtime.tasks.completeLease(
+      completion,
+      TEST_AUTHORIZATION,
+    );
+    expect(completed).toMatchObject({
+      id: task.id,
+      claimed: false,
+      result: 'completed on the first attempt',
+    });
+    await expect(
+      context.runtime.tasks.completeLease(completion, TEST_AUTHORIZATION),
+    ).resolves.toEqual(completed);
+    await expect(
+      context.runtime.tasks.completeLease(
+        { ...completion, result: 'altered replay' },
+        TEST_AUTHORIZATION,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+    await expect(
+      context.runtime.tasks.completeLease(completion, {
+        ...TEST_AUTHORIZATION,
+        principalId: 'agent:loser',
+      }),
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(/forbidden|conflict/u),
     });
   });
 

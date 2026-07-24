@@ -46,6 +46,14 @@ For filesystem resource backup and restore, instantiate
 `@gnolith/workshop/backup` and pass its `backup` and `restore` ports to the
 Taproot/Seedbed orchestration. Do not construct blob paths from reference IDs.
 
+Installation restore remains owner-opaque. Call
+`createWorkshopBackupApi(...).importBackup(document)` or the bound owner
+handle's `importOwnedState(...)`; never parse Workshop tables in the
+orchestrator. Import atomically replaces the bound installation's Workshop
+state, restores each logical idempotency record once, preserves receipts,
+revisions, and outcomes, expires live leases, and rejects inconsistent
+duplicates.
+
 To transfer an existing exact 0.4.2 database, use
 `decodeWorkshopLegacyOwnerV042` and `adoptWorkshopLegacyOwnerV042` from
 `@gnolith/workshop/backup`. The decoder requires exact 0.4.2/schema-6 and

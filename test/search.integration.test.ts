@@ -14,6 +14,10 @@ import {
 } from '@gnolith/taproot';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyWorkshopMigrations } from '../src/migrations.js';
+import {
+  createOperationRuntime,
+  type OperationCallContext,
+} from '../src/operations.js';
 import type { AuthorizationContext } from '../src/protocol.js';
 import { createWorkshopCore } from '../src/server/context.js';
 import { createWorkshopSearchIntegrationV1 } from '../src/server/search.js';
@@ -112,7 +116,7 @@ describe('Workshop external search producers', () => {
           throw new Error('unused');
         },
       });
-      const context = {
+      const context: OperationCallContext = {
         principal: {
           installationId,
           principalId: 'principal:owner',
@@ -131,65 +135,157 @@ describe('Workshop external search producers', () => {
         requestId: 'request:admin-test',
         signal: new AbortController().signal,
       };
-      const created = (await port.call(
-        'authorization_admin',
-        {
-          version: 1,
-          action: 'principal-create',
-          expectedPolicyRevision: context.principal.authorizationRevision,
-          idempotencyKey: 'principal-worker-v1',
-          principal: { principalId: 'principal:worker', enabled: true },
+      const operations = createOperationRuntime({
+        version: '0.5.0',
+        taproot: port,
+        diamond: {
+          async validate() {
+            return {};
+          },
+          async query() {
+            return {};
+          },
         },
-        context,
-      )) as { status: string; policyRevision: number };
+        workshop: {
+          async call() {
+            return {};
+          },
+        },
+      });
+      const admin = (input: Record<string, unknown>) =>
+        operations.call('authorization_admin', input, context);
+      const created = (await admin({
+        version: 1,
+        action: 'principal-create',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'principal-worker-v1',
+        principal: { principalId: 'principal:worker', enabled: true },
+      })) as { status: string; policyRevision: number };
       expect(created).toMatchObject({
         status: 'committed',
         target: { kind: 'principal', id: 'principal:worker' },
       });
       context.principal.authorizationRevision = created.policyRevision;
       await expect(
-        port.call(
-          'authorization_admin',
-          {
-            version: 1,
-            action: 'principal-create',
-            expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
-            idempotencyKey: 'principal-worker-v1',
-            principal: { principalId: 'principal:worker', enabled: true },
-          },
-          context,
-        ),
+        admin({
+          version: 1,
+          action: 'principal-create',
+          expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
+          idempotencyKey: 'principal-worker-v1',
+          principal: { principalId: 'principal:worker', enabled: true },
+        }),
       ).resolves.toMatchObject({ status: 'replayed' });
       await expect(
-        port.call(
-          'authorization_admin',
-          {
-            version: 1,
-            action: 'principal-create',
-            expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
-            idempotencyKey: 'principal-worker-v1',
-            principal: { principalId: 'principal:other', enabled: true },
-          },
-          context,
-        ),
+        admin({
+          version: 1,
+          action: 'principal-create',
+          expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
+          idempotencyKey: 'principal-worker-v1',
+          principal: { principalId: 'principal:other', enabled: true },
+        }),
       ).rejects.toMatchObject({ code: 'conflict', status: 409 });
 
-      const registered = (await port.call(
-        'authorization_admin',
-        {
-          version: 1,
-          action: 'credential-register',
-          expectedPolicyRevision: context.principal.authorizationRevision,
-          idempotencyKey: 'credential-worker-v1',
-          credential: {
-            credentialId: 'credential:worker',
-            tokenDigest: 'a'.repeat(64),
+      const membershipAdded = (await admin({
+        version: 1,
+        action: 'workspace-membership-add',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'membership-worker-v1',
+        principalId: 'principal:worker',
+        workspaceId: 'workspace:admin-test',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = membershipAdded.policyRevision;
+      const grantAdded = (await admin({
+        version: 1,
+        action: 'workspace-grant-add',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'grant-worker-read-v1',
+        principalId: 'principal:worker',
+        workspaceId: 'workspace:admin-test',
+        capability: 'read',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = grantAdded.policyRevision;
+      await expect(
+        port.recheckPrincipal(
+          {
+            ...context.principal,
             principalId: 'principal:worker',
-            workspaceId: 'workspace:admin-test',
+            credentialId: 'credential:worker',
+            capabilities: [],
+            workspaceIds: [],
+          },
+          context.signal,
+        ),
+      ).resolves.toMatchObject({
+        principalId: 'principal:worker',
+        workspaceIds: ['workspace:admin-test'],
+        capabilities: expect.arrayContaining(['read']),
+      });
+      const entity = (await operations.call(
+        'create_item',
+        {
+          idempotencyKey: 'authorization-visible-item-v1',
+          authoredText: 'Create an item for bounded authorization testing.',
+          data: {
+            id: 'Q1',
+            labels: {
+              en: { language: 'en', value: 'Authorized visible item' },
+            },
           },
         },
         context,
-      )) as { policyRevision: number };
+      )) as {
+        entityId: string;
+        newRevision: number;
+      };
+      context.principal = await port.recheckPrincipal(
+        context.principal,
+        context.signal,
+      );
+      const visible = (await admin({
+        version: 1,
+        action: 'visibility-policy-set',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'visibility-worker-v1',
+        target: { kind: 'entity', id: entity.entityId },
+        expectedTargetRevision: entity.newRevision,
+        visibility: {
+          version: 1,
+          clauses: [
+            [{ kind: 'workspace', workspaceId: 'workspace:admin-test' }],
+          ],
+        },
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = visible.policyRevision;
+      const workerPrincipal = await port.recheckPrincipal(
+        {
+          ...context.principal,
+          principalId: 'principal:worker',
+          credentialId: 'credential:worker',
+          capabilities: [],
+          workspaceIds: [],
+        },
+        context.signal,
+      );
+      await expect(
+        operations.call(
+          'get_entity',
+          { entityId: entity.entityId },
+          { ...context, principal: workerPrincipal },
+        ),
+      ).resolves.toMatchObject({ entity: { id: entity.entityId } });
+
+      const registered = (await admin({
+        version: 1,
+        action: 'credential-register',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'credential-worker-v1',
+        credential: {
+          credentialId: 'credential:worker',
+          tokenDigest: 'a'.repeat(64),
+          principalId: 'principal:worker',
+          workspaceId: 'workspace:admin-test',
+        },
+      })) as { policyRevision: number };
       context.principal.authorizationRevision = registered.policyRevision;
       await expect(
         workshopDb
@@ -201,17 +297,46 @@ describe('Workshop external search producers', () => {
           .first(),
       ).resolves.toEqual({ token_digest: 'a'.repeat(64), disabled: 0 });
 
-      const disabled = (await port.call(
-        'authorization_admin',
-        {
-          version: 1,
-          action: 'principal-disable',
-          expectedPolicyRevision: context.principal.authorizationRevision,
-          idempotencyKey: 'disable-worker-v1',
+      const credentialRevoked = (await admin({
+        version: 1,
+        action: 'credential-revoke',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'credential-worker-revoke-v1',
+        credentialId: 'credential:worker',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision =
+        credentialRevoked.policyRevision;
+      await expect(
+        workshopDb
+          .prepare(
+            `SELECT disabled FROM workshop_credentials
+             WHERE installation_id = ? AND credential_id = ?`,
+          )
+          .bind(installationId, 'credential:worker')
+          .first(),
+      ).resolves.toEqual({ disabled: 1 });
+
+      const registeredAgain = (await admin({
+        version: 1,
+        action: 'credential-register',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'credential-worker-reregister-v1',
+        credential: {
+          credentialId: 'credential:worker',
+          tokenDigest: 'b'.repeat(64),
           principalId: 'principal:worker',
+          workspaceId: 'workspace:admin-test',
         },
-        context,
-      )) as { policyRevision: number };
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = registeredAgain.policyRevision;
+
+      const disabled = (await admin({
+        version: 1,
+        action: 'principal-disable',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'disable-worker-v1',
+        principalId: 'principal:worker',
+      })) as { policyRevision: number };
       context.principal.authorizationRevision = disabled.policyRevision;
       await expect(
         workshopDb
@@ -232,16 +357,100 @@ describe('Workshop external search producers', () => {
           context.signal,
         ),
       ).rejects.toMatchObject({ code: 'forbidden' });
+      const enabled = (await admin({
+        version: 1,
+        action: 'principal-enable',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'enable-worker-v1',
+        principalId: 'principal:worker',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = enabled.policyRevision;
+      const revoked = (await admin({
+        version: 1,
+        action: 'principal-revoke',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'revoke-worker-v1',
+        principalId: 'principal:worker',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision = revoked.policyRevision;
       await expect(
-        port.call(
-          'authorization_admin',
-          { version: 1, action: 'status' },
-          context,
-        ),
+        port.recheckPrincipal(workerPrincipal, context.signal),
+      ).rejects.toMatchObject({ code: 'forbidden' });
+      const membershipRemoved = (await admin({
+        version: 1,
+        action: 'workspace-membership-remove',
+        expectedPolicyRevision: context.principal.authorizationRevision,
+        idempotencyKey: 'membership-worker-remove-v1',
+        principalId: 'principal:worker',
+        workspaceId: 'workspace:admin-test',
+      })) as { policyRevision: number };
+      context.principal.authorizationRevision =
+        membershipRemoved.policyRevision;
+
+      for (const [input, key] of [
+        [
+          {
+            action: 'principal-create',
+            principal: { principalId: 'principal:cleanup', enabled: true },
+          },
+          'cleanup-create',
+        ],
+        [
+          {
+            action: 'workspace-membership-add',
+            principalId: 'principal:cleanup',
+            workspaceId: 'workspace:admin-test',
+          },
+          'cleanup-membership-add',
+        ],
+        [
+          {
+            action: 'workspace-grant-add',
+            principalId: 'principal:cleanup',
+            workspaceId: 'workspace:admin-test',
+            capability: 'read',
+          },
+          'cleanup-grant-add',
+        ],
+        [
+          {
+            action: 'workspace-grant-remove',
+            principalId: 'principal:cleanup',
+            workspaceId: 'workspace:admin-test',
+            capability: 'read',
+          },
+          'cleanup-grant-remove',
+        ],
+        [
+          {
+            action: 'workspace-membership-remove',
+            principalId: 'principal:cleanup',
+            workspaceId: 'workspace:admin-test',
+          },
+          'cleanup-membership-remove',
+        ],
+        [
+          { action: 'principal-revoke', principalId: 'principal:cleanup' },
+          'cleanup-revoke',
+        ],
+      ] as const) {
+        const result = (await admin({
+          version: 1,
+          ...input,
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          idempotencyKey: key,
+        })) as { policyRevision: number };
+        context.principal.authorizationRevision = result.policyRevision;
+      }
+      await expect(
+        admin({ version: 1, action: 'status' }),
       ).resolves.toMatchObject({
         action: 'status',
-        value: { principals: 1, credentials: 1, audits: 3 },
+        value: { principals: 2, credentials: 1, audits: 17 },
       });
+      await expect(
+        port.recheckPrincipal(context.principal, context.signal),
+      ).resolves.toMatchObject({ principalId: 'principal:owner' });
     } finally {
       await db.close();
     }

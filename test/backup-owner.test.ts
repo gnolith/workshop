@@ -33,17 +33,18 @@ describe('Workshop owner backup handle factory', () => {
       await source.db
         .prepare(
           `INSERT INTO workshop_tasks (
-             id, description, prompt, context_queries, memory_slugs, claimed,
+             id, idempotency_key, description, prompt, context_queries, memory_slugs, claimed,
              installation_id, owner_principal_id, workspace_id,
              visibility_scope, authorization_revision, title, objective,
              constraints_json, acceptance_criteria_json, relationships_json,
              outcome_kind, language, attribution_json, policy_revision,
-             revision, created_at, updated_at
-           ) VALUES (?, ?, ?, '[]', '[]', 0, ?, ?, ?, ?, 1, ?, NULL, '[]',
-                     '[]', '[]', NULL, 'en', '{}', 1, 1, ?, ?)`,
+             revision, completed_at, result, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, '[]', '[]', 0, ?, ?, ?, ?, 1, ?, NULL, '[]',
+                     '[]', '[]', 'success', 'en', '{}', 1, 2, ?, ?, ?, ?)`,
         )
         .bind(
           'backup-task',
+          'installation:backup-owner\u0000workspace:owner\u0000principal:owner\u0000create-once',
           'Back up this task',
           'Restore it safely',
           installationId,
@@ -54,10 +55,57 @@ describe('Workshop owner backup handle factory', () => {
             clauses: [[{ kind: 'workspace', workspaceId: 'workspace:owner' }]],
           }),
           'Back up this task',
+          '2026-07-23T12:05:00.000Z',
+          'completed exactly once',
           '2026-07-23T12:00:00.000Z',
-          '2026-07-23T12:00:00.000Z',
+          '2026-07-23T12:05:00.000Z',
         )
         .run();
+      await source.db.batch([
+        source.db
+          .prepare(
+            `INSERT INTO workshop_task_revisions (
+               task_id, revision, snapshot_json, actor_principal_id, event_id, created_at
+             ) VALUES (?, 1, ?, ?, ?, ?), (?, 2, ?, ?, ?, ?)`,
+          )
+          .bind(
+            'backup-task',
+            JSON.stringify({ id: 'backup-task', revision: 1 }),
+            'principal:owner',
+            'event:backup-created',
+            '2026-07-23T12:00:00.000Z',
+            'backup-task',
+            JSON.stringify({
+              id: 'backup-task',
+              revision: 2,
+              result: 'completed exactly once',
+            }),
+            'principal:owner',
+            'event:backup-completed',
+            '2026-07-23T12:05:00.000Z',
+          ),
+        source.db
+          .prepare(
+            `INSERT INTO workshop_task_lease_receipts (
+               installation_id, principal_id, idempotency_key, task_id,
+               operation, expected_revision, resulting_revision,
+               receipt_json, created_at, request_digest
+             ) VALUES (?, ?, ?, ?, 'complete', 1, 2, ?, ?, ?)`,
+          )
+          .bind(
+            installationId,
+            'principal:owner',
+            'complete-once',
+            'backup-task',
+            JSON.stringify({
+              id: 'backup-task',
+              revision: 2,
+              result: 'completed exactly once',
+            }),
+            '2026-07-23T12:05:00.000Z',
+            'd'.repeat(64),
+          ),
+      ]);
 
       const sourceApi = createWorkshopBackupApi({
         ...createWorkshopOwnerHandlesV1(
@@ -95,6 +143,39 @@ describe('Workshop owner backup handle factory', () => {
         schemaVersion: 11,
         clock: () => new Date('2026-07-23T14:00:00.000Z'),
       });
+      await destination.db
+        .prepare(
+          `INSERT INTO workshop_tasks (
+             id, idempotency_key, description, prompt, context_queries,
+             memory_slugs, claimed, installation_id, owner_principal_id,
+             workspace_id, visibility_scope, authorization_revision, title,
+             constraints_json, acceptance_criteria_json, relationships_json,
+             language, attribution_json, policy_revision, revision,
+             created_at, updated_at
+           ) VALUES (?, ?, ?, ?, '[]', '[]', 0, ?, ?, ?, ?, 1, ?, '[]',
+                     '[]', '[]', 'en', '{}', 1, 1, ?, ?)`,
+        )
+        .bind(
+          'dry-run-collision',
+          'installation:backup-owner\u0000workspace:owner\u0000principal:owner\u0000create-once',
+          'Dry-run placeholder',
+          'Must be replaced',
+          installationId,
+          'principal:owner',
+          'workspace:owner',
+          JSON.stringify({
+            version: 1,
+            clauses: [[{ kind: 'workspace', workspaceId: 'workspace:owner' }]],
+          }),
+          'Dry-run placeholder',
+          '2026-07-23T13:30:00.000Z',
+          '2026-07-23T13:30:00.000Z',
+        )
+        .run();
+      await expect(destinationApi.importBackup(backup)).resolves.toMatchObject({
+        valid: true,
+        legacy: { taskCount: 1 },
+      });
       await expect(destinationApi.importBackup(backup)).resolves.toMatchObject({
         valid: true,
         legacy: { taskCount: 1 },
@@ -110,6 +191,61 @@ describe('Workshop owner backup handle factory', () => {
         installation_id: installationId,
         title: 'Back up this task',
       });
+      await expect(
+        destination.db
+          .prepare(
+            `SELECT id, revision, outcome_kind, result
+             FROM workshop_tasks WHERE installation_id = ?`,
+          )
+          .bind(installationId)
+          .all(),
+      ).resolves.toMatchObject({
+        results: [
+          {
+            id: 'backup-task',
+            revision: 2,
+            outcome_kind: 'success',
+            result: 'completed exactly once',
+          },
+        ],
+        success: true,
+      });
+      await expect(
+        destination.db
+          .prepare(
+            `SELECT operation, expected_revision, resulting_revision,
+                    request_digest, receipt_json
+             FROM workshop_task_lease_receipts
+             WHERE installation_id = ? AND idempotency_key = ?`,
+          )
+          .bind(installationId, 'complete-once')
+          .first(),
+      ).resolves.toEqual({
+        operation: 'complete',
+        expected_revision: 1,
+        resulting_revision: 2,
+        request_digest: 'd'.repeat(64),
+        receipt_json: JSON.stringify({
+          id: 'backup-task',
+          revision: 2,
+          result: 'completed exactly once',
+        }),
+      });
+
+      const inconsistent = structuredClone(backup) as {
+        sections: {
+          workshop: {
+            tables: Record<string, Array<Record<string, unknown>>>;
+          };
+        };
+      };
+      inconsistent.sections.workshop.tables.workshop_tasks?.push({
+        ...inconsistent.sections.workshop.tables.workshop_tasks[0],
+        id: 'duplicate-idempotency',
+      });
+      await expect(
+        destinationApi.inspectBackup(inconsistent),
+      ).rejects.toMatchObject({ code: 'validation_failed' });
     } finally {
       await source.close();
       await destination.close();

@@ -14,6 +14,10 @@ import {
   type TaprootHostWriteCapability,
   type TaprootWriteOptions,
 } from '@gnolith/taproot';
+import type {
+  SearchMaterializationAdminGuardV1,
+  SearchMaterializationRunOptionsV1,
+} from '@gnolith/taproot/search';
 import {
   D1QuadSource,
   createMigrationLedgerBackupV1,
@@ -228,6 +232,7 @@ async function assembleExecutableDependencies(
     registrationContext,
     ...(input.semantic ? { semantic: input.semantic } : {}),
   });
+  const materialization = serializeMaterializationRuns(search.materialization);
   const expectation: WorkshopProducerBindingExpectation = {
     installationId: input.installationId,
     connectionId: ownerHandles.owner.connectionId,
@@ -286,6 +291,7 @@ async function assembleExecutableDependencies(
       hostAuthority: input.taproot.hostAuthority,
       cursorCodec: input.taproot.authorizationCursorCodec,
       search: search.service,
+      materialization,
       ...(input.taproot.payloadStore
         ? { payloadStore: input.taproot.payloadStore }
         : {}),
@@ -343,7 +349,7 @@ async function assembleExecutableDependencies(
           const liveRegistrationContext = await operator.resolveAuthorization(
             input.taproot.registrationPrincipal,
           );
-          await search.materialization.run(liveRegistrationContext, {
+          await materialization.run(liveRegistrationContext, {
             maxJobs: 10,
             maxRebuildRoots: 10,
           });
@@ -369,6 +375,40 @@ async function assembleExecutableDependencies(
     ownerHandles,
   };
   return Object.freeze(dependencies);
+}
+
+function serializeMaterializationRuns(
+  guard: SearchMaterializationAdminGuardV1,
+): SearchMaterializationAdminGuardV1 {
+  let tail: Promise<void> = Promise.resolve();
+  const run = (
+    context: TaprootAuthorizationContext,
+    options: SearchMaterializationRunOptionsV1,
+  ) => {
+    const current = tail
+      .catch(() => undefined)
+      .then(() => guard.run(context, options));
+    tail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  };
+  return Object.freeze({
+    kind: 'taproot-search-materialization-admin-v1' as const,
+    initialize: (context: TaprootAuthorizationContext) =>
+      guard.initialize(context),
+    run,
+    health: (context: TaprootAuthorizationContext) => guard.health(context),
+    retryDead: (
+      context: TaprootAuthorizationContext,
+      options: { limit: number },
+    ) => guard.retryDead(context, options),
+    startShadowRebuild: (context: TaprootAuthorizationContext) =>
+      guard.startShadowRebuild(context),
+    activateReadyShadow: (context: TaprootAuthorizationContext) =>
+      guard.activateReadyShadow(context),
+  });
 }
 
 async function createLocalOwnerHandles(

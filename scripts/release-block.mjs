@@ -14,7 +14,7 @@ const exactIntegrity =
   'sha512-yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==';
 const candidateVersion = '0.5.0';
 const candidateIntegrity =
-  'sha512-0D0a0MYykbf/q/s72kEQWtMbV7EY2iq700/QBsUoGsGaSSc7zbjDQ3/IpuX+xl4BDvI1Y+HPg9/hgV5eTJLO0w==';
+  'sha512-Vqy9dThqY2731OkRHtBA1nKMGKx5UcYVl72hg8w0SfaL8eULZhsEwqHpihnQksDiJMxNHso18zowqS7sP2n3mg==';
 
 export function verifyInstalledTaprootCandidate() {
   const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));

@@ -444,6 +444,16 @@ function nodeRequest(
   } as RequestInit);
 }
 
+function rejectEncodedTraversalTarget(rawTarget: string): void {
+  const path = rawTarget.split('?', 1)[0] ?? '';
+  if (/%(?:2e|2f|5c)/iu.test(path))
+    throw new WorkshopError(
+      'bad_request',
+      'Encoded path traversal is not allowed',
+      400,
+    );
+}
+
 async function writeNodeResponse(
   response: Response,
   outgoing: import('node:http').ServerResponse,
@@ -470,6 +480,7 @@ async function handleNodeExchange(
   fetchHandler: (request: Request) => Promise<Response>,
 ): Promise<void> {
   try {
+    rejectEncodedTraversalTarget(incoming.url ?? '/');
     const response = await fetchHandler(nodeRequest(incoming, listener));
     await writeNodeResponse(response, outgoing);
   } catch (error) {

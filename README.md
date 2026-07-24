@@ -55,7 +55,8 @@ remains available.
 
 Verified Waystone assets should use the exported `/app` mount recommendation.
 The root, `/mcp`, `/health`, `/api`, and `/.well-known` namespaces cannot be
-used or shadowed by an asset mount.
+used or shadowed by an asset mount. The Node listener rejects encoded dot
+segments and encoded path separators before URL normalization.
 
 Local resource payload backup and restore use the public server-only factory:
 
@@ -70,6 +71,11 @@ const blobs = await createLocalFilesystemResourceBlobPortsV1({
 The returned `backup` and `restore` ports accept only Taproot descriptors,
 streams, stage IDs, and opaque reference IDs. Filesystem layout remains private
 to Workshop.
+
+Whole-owner restore uses `createWorkshopBackupApi` from the same export.
+Orchestrators pass the opaque document back to `importBackup`; Workshop
+canonicalizes logical records, atomically replaces only the bound
+installation's owner state, and rejects inconsistent duplicates.
 
 ## Protocol
 
