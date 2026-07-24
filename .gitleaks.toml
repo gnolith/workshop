@@ -9,3 +9,11 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^item-subject-v1$''']
 paths = ['''(^|/)test/search\.integration\.test\.ts$''']
+
+[[allowlists]]
+description = "Known non-secret bootstrap migration identifier"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = ['''^0008_bootstrap_credentials',\r?\n\s*'0009_operation_receipts'$''']
+paths = ['''(^|/)scripts/prepare-candidate\.mjs$''']
