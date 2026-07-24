@@ -416,13 +416,17 @@ async function searchAdministration(
           : { state: 'unconfigured' },
       };
     case 'materialize': {
-      const receipt = await runtime.materialization.run(context, {
-        maxJobs: limit,
-        maxRebuildRoots: optionalInteger(values.maxRebuildRoots, limit),
-        ...(typeof values.maxChunkBytes === 'number'
-          ? { maxChunkBytes: values.maxChunkBytes }
-          : {}),
-      });
+      const receipt = await runBoundedMaterialization(
+        runtime.materialization,
+        context,
+        {
+          limit,
+          maxRebuildRoots: optionalInteger(values.maxRebuildRoots, limit),
+          ...(typeof values.maxChunkBytes === 'number'
+            ? { maxChunkBytes: values.maxChunkBytes }
+            : {}),
+        },
+      );
       const health = truthfulMaterializationHealth(
         await runtime.materialization.health(context),
       );
@@ -537,6 +541,52 @@ async function searchAdministration(
         400,
       );
   }
+}
+
+async function runBoundedMaterialization(
+  materialization: SearchMaterializationAdminGuardV1,
+  context: AuthorizationContext,
+  options: {
+    limit: number;
+    maxRebuildRoots: number;
+    maxChunkBytes?: number;
+  },
+) {
+  const total = {
+    claimed: 0,
+    completed: 0,
+    superseded: 0,
+    deferred: 0,
+    dead: 0,
+    rebuildRootsEnumerated: 0,
+  };
+  let remainingJobs = options.limit;
+  let remainingRebuildRoots = options.maxRebuildRoots;
+  while (remainingJobs > 0 && remainingRebuildRoots > 0) {
+    const jobBudget = Math.min(100, remainingJobs);
+    const rebuildBudget = Math.min(100, remainingRebuildRoots);
+    const receipt = await materialization.run(context, {
+      // Taproot deliberately bounds each owner call to 100 jobs/roots. The
+      // public Workshop limit is a total budget, so larger requests are
+      // fulfilled through repeated bounded calls rather than forwarded as one
+      // invalid Taproot run.
+      maxJobs: jobBudget,
+      maxRebuildRoots: rebuildBudget,
+      ...(options.maxChunkBytes === undefined
+        ? {}
+        : { maxChunkBytes: options.maxChunkBytes }),
+    });
+    total.claimed += receipt.claimed;
+    total.completed += receipt.completed;
+    total.superseded += receipt.superseded;
+    total.deferred += receipt.deferred;
+    total.dead += receipt.dead;
+    total.rebuildRootsEnumerated += receipt.rebuildRootsEnumerated;
+    remainingJobs -= jobBudget;
+    remainingRebuildRoots -= rebuildBudget;
+    if (receipt.claimed === 0 && receipt.rebuildRootsEnumerated === 0) break;
+  }
+  return total;
 }
 
 export function truthfulMaterializationHealth(

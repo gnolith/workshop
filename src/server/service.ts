@@ -173,6 +173,16 @@ export function createWorkshopHttpService(
           503,
         );
       server = createServer((incoming, outgoing) => {
+        // IncomingMessage.url is the only request-target representation that
+        // still preserves encoded dot segments. Fence it synchronously in the
+        // Node listener before constructing a WHATWG URL or entering any
+        // health, MCP, operation, or asset router.
+        try {
+          rejectEncodedTraversalTarget(incoming.url ?? '/');
+        } catch (error) {
+          writeNodeError(error, outgoing);
+          return;
+        }
         void handleNodeExchange(incoming, outgoing, listener, fetch);
       });
       server.requestTimeout = 35_000;
@@ -502,25 +512,31 @@ async function handleNodeExchange(
   fetchHandler: (request: Request) => Promise<Response>,
 ): Promise<void> {
   try {
-    rejectEncodedTraversalTarget(incoming.url ?? '/');
     const response = await fetchHandler(nodeRequest(incoming, listener));
     await writeNodeResponse(response, outgoing);
   } catch (error) {
-    const normalized = normalizeWorkshopError(error);
-    outgoing.statusCode = normalized.status;
-    outgoing.setHeader('content-type', 'application/json');
-    outgoing.end(
-      JSON.stringify({
-        error: {
-          code: normalized.code,
-          message:
-            normalized.code === 'internal_error'
-              ? 'Workshop operation failed'
-              : normalized.message,
-        },
-      }),
-    );
+    writeNodeError(error, outgoing);
   }
+}
+
+function writeNodeError(
+  error: unknown,
+  outgoing: import('node:http').ServerResponse,
+): void {
+  const normalized = normalizeWorkshopError(error);
+  outgoing.statusCode = normalized.status;
+  outgoing.setHeader('content-type', 'application/json');
+  outgoing.end(
+    JSON.stringify({
+      error: {
+        code: normalized.code,
+        message:
+          normalized.code === 'internal_error'
+            ? 'Workshop operation failed'
+            : normalized.message,
+      },
+    }),
+  );
 }
 
 function formatHost(host: string): string {

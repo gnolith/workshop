@@ -63,6 +63,8 @@ const producerBinding = bindWorkshopProducerHandles(
 
 describe('executable listener and authentication', () => {
   it('validates and serves an immutable /app mount without shadowing service routes', async () => {
+    let authenticationCalls = 0;
+    let operationCalls = 0;
     const indexBytes = new TextEncoder().encode(
       '<!doctype html><title>Waystone</title>',
     );
@@ -103,6 +105,7 @@ describe('executable listener and authentication', () => {
         profile: 'local-bearer-v1',
         challenge: 'Bearer',
         async authenticate() {
+          authenticationCalls += 1;
           throw new Error('unused');
         },
         protectedResourceMetadata: () => null,
@@ -115,6 +118,7 @@ describe('executable listener and authentication', () => {
         catalog: operationCatalog,
         catalogDigest: CATALOG_DIGEST,
         async call() {
+          operationCalls += 1;
           return {};
         },
       },
@@ -173,6 +177,8 @@ describe('executable listener and authentication', () => {
         '/app/%252e%252e/mcp',
         '/app/%252E%252E/health/live',
         '/app/%2e%2E/health/live',
+        '/app/%252e%2E/mcp',
+        '/app/%2E%252e/health/live',
         '/app/../mcp',
         '/app%2f..%2fmcp',
         '/app/%5c..%5chealth/live',
@@ -181,6 +187,20 @@ describe('executable listener and authentication', () => {
         expect(response.statusLine, target).toContain(' 400 ');
         expect(response.body, target).toContain('bad_request');
       }
+      const mcpTraversal = await rawHttp(
+        address.port,
+        '/app/%2e%2e/mcp',
+        'POST',
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'gnolith_status', arguments: {} },
+        }),
+      );
+      expect(mcpTraversal.statusLine).toContain(' 400 ');
+      expect(authenticationCalls).toBe(0);
+      expect(operationCalls).toBe(0);
       expect(
         (await fetch(`http://127.0.0.1:${address.port}/health/live`)).status,
       ).toBe(200);
@@ -431,6 +451,8 @@ function canonicalize(value: unknown): string {
 async function rawHttp(
   port: number,
   target: string,
+  method = 'GET',
+  body = '',
 ): Promise<{ statusLine: string; body: string }> {
   const response = await new Promise<string>((resolve, reject) => {
     const socket = connect(port, '127.0.0.1');
@@ -443,7 +465,7 @@ async function rawHttp(
     socket.once('end', () => resolve(value));
     socket.once('connect', () => {
       socket.end(
-        `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+        `${method} ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
       );
     });
   });

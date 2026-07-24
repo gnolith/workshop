@@ -191,14 +191,69 @@ class WorkshopAuthorizationAdministration implements WorkshopAuthorizationAdmini
     };
   }
 
-  private effective(input: Input, context: OperationCallContext): unknown {
+  private async effective(
+    input: Input,
+    context: OperationCallContext,
+  ): Promise<unknown> {
     const target = object(input.target);
+    const kind = string(target.kind);
+    const id = string(target.id);
+    const policy =
+      kind === 'entity'
+        ? await this.options.db
+            .prepare(
+              `SELECT source_revision, authorization_revision AS policy_revision,
+                      workspace_id, owner_principal_id, visibility_json
+                 FROM taproot_entity_authorization
+                WHERE installation_id = ? AND entity_id = ?`,
+            )
+            .bind(this.options.installationId, id)
+            .first<{
+              source_revision: number;
+              policy_revision: number;
+              workspace_id: string | null;
+              owner_principal_id: string;
+              visibility_json: string;
+            }>()
+        : kind === 'resource' || kind === 'annotation'
+          ? await this.options.db
+              .prepare(
+                `SELECT revision AS source_revision,
+                        policy_revision, NULL AS workspace_id,
+                        NULL AS owner_principal_id, visibility_json
+                   FROM ${
+                     kind === 'resource'
+                       ? 'taproot_resources'
+                       : 'taproot_annotations'
+                   }
+                  WHERE installation_id = ? AND record_id = ?`,
+              )
+              .bind(this.options.installationId, id)
+              .first<{
+                source_revision: number;
+                policy_revision: number;
+                workspace_id: null;
+                owner_principal_id: null;
+                visibility_json: string;
+              }>()
+          : null;
+    if (!policy)
+      throw new WorkshopError(
+        'not_found',
+        'Authorization policy target was not found',
+        404,
+      );
     return {
       version: 1,
       action: 'effective-policy',
       policyRevision: context.principal.authorizationRevision,
       value: {
-        target: { kind: string(target.kind), id: string(target.id) },
+        target: { kind, id },
+        sourceRevision: Number(policy.source_revision),
+        sourcePolicyRevision: Number(policy.policy_revision),
+        workspaceId: policy.workspace_id,
+        ownerPrincipalId: policy.owner_principal_id,
+        visibility: parsePolicyJson(policy.visibility_json),
         principalId: context.principal.principalId,
         activeWorkspaceId: context.principal.activeWorkspaceId,
         workspaceIds: [...(context.principal.workspaceIds ?? [])],
@@ -299,6 +354,18 @@ function createOwner(db: D1DatabaseLike): OwnerController {
       return token;
     },
   };
+}
+
+function parsePolicyJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw new WorkshopError(
+      'internal_error',
+      'Authorization policy record is invalid',
+      500,
+    );
+  }
 }
 
 function ownerMutationStatements(
@@ -698,6 +765,16 @@ function mapTaprootAdministrationError(error: unknown): never {
     'internal_error',
     'Authorization administration failed',
     500,
+    {
+      taprootErrorName:
+        typeof candidate?.name === 'string'
+          ? candidate.name.slice(0, 128)
+          : 'unknown',
+      taprootErrorCode:
+        typeof candidate?.code === 'string'
+          ? candidate.code.slice(0, 128)
+          : 'unknown',
+    },
   );
 }
 

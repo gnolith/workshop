@@ -401,8 +401,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
   assert.equal(delegatedStatus.principalId, 'principal:delegated');
   await successfulToolCall(origin, delegatedToken, 107, 'authorization_admin', {
     version: 1,
-    action: 'effective-policy',
-    target: { kind: 'entity', id: 'Q900' },
+    action: 'status',
   });
   const delegatedGrant = await successfulToolCall(
     origin,
@@ -467,25 +466,49 @@ export async function createWorkshopSemanticConfigurationDependencies(
     },
   });
   assert.equal(created.result?.isError, false, JSON.stringify(created));
-  const beforeIdenticalStatus = await successfulToolCall(
+  const revisionTwo = await successfulToolCall(
     origin,
     token,
     116,
+    'mutate_entity',
+    {
+      entityId: 'Q900',
+      expectedRevision: 1,
+      idempotencyKey: 'packed-changed-label-2',
+      mutations: [
+        {
+          kind: 'label',
+          authoredText: 'Set packed label revision two.',
+          value: {
+            type: 'set-label',
+            language: 'en',
+            value: 'Packed restart item revision two',
+          },
+        },
+      ],
+    },
+  );
+  assert.equal(revisionTwo.changed, true);
+  assert.equal(revisionTwo.newRevision, 2);
+  const beforeIdenticalStatus = await successfulToolCall(
+    origin,
+    token,
+    117,
     'gnolith_status',
     {},
   );
   const beforeIdenticalHealth = await successfulToolCall(
     origin,
     token,
-    117,
+    118,
     'search_admin',
     { action: 'health' },
   );
   const identicalCalls = await Promise.all(
     ['a', 'b'].map((suffix, index) =>
-      successfulToolCall(origin, token, 118 + index, 'mutate_entity', {
+      successfulToolCall(origin, token, 119 + index, 'mutate_entity', {
         entityId: 'Q900',
-        expectedRevision: 1,
+        expectedRevision: 2,
         idempotencyKey: `packed-identical-label-${suffix}`,
         mutations: [
           {
@@ -494,7 +517,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
             value: {
               type: 'set-label',
               language: 'en',
-              value: 'Packed restart item',
+              value: 'Packed restart item revision two',
             },
           },
         ],
@@ -503,20 +526,20 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   for (const identical of identicalCalls) {
     assert.equal(identical.changed, false);
-    assert.equal(identical.newRevision, 1);
+    assert.equal(identical.newRevision, 2);
     assert.deepEqual(identical.quadPatch, { deleted: 0, inserted: 0 });
   }
   const afterIdenticalStatus = await successfulToolCall(
     origin,
     token,
-    120,
+    121,
     'gnolith_status',
     {},
   );
   const afterIdenticalHealth = await successfulToolCall(
     origin,
     token,
-    121,
+    122,
     'search_admin',
     { action: 'health' },
   );
@@ -532,36 +555,48 @@ export async function createWorkshopSemanticConfigurationDependencies(
     afterIdenticalHealth.materialization.activeAppliedWatermark,
     beforeIdenticalHealth.materialization.activeAppliedWatermark,
   );
-  let entityRevision = 1;
-  for (const [index, value] of [
-    'Packed restart item revision two',
-    'Packed restart item revision three',
-  ].entries()) {
-    const changed = await successfulToolCall(
-      origin,
-      token,
-      122 + index,
-      'mutate_entity',
-      {
-        entityId: 'Q900',
-        expectedRevision: entityRevision,
-        idempotencyKey: `packed-changed-label-${index + 2}`,
-        mutations: [
-          {
-            kind: 'label',
-            authoredText: `Set packed label revision ${index + 2}.`,
-            value: { type: 'set-label', language: 'en', value },
+  assert.equal(
+    afterIdenticalHealth.materialization.activeCorpusGeneration,
+    beforeIdenticalHealth.materialization.activeCorpusGeneration,
+  );
+  assert.equal(
+    afterIdenticalHealth.materialization.cursorGeneration,
+    beforeIdenticalHealth.materialization.cursorGeneration,
+  );
+  const revisionThree = await successfulToolCall(
+    origin,
+    token,
+    123,
+    'mutate_entity',
+    {
+      entityId: 'Q900',
+      expectedRevision: 2,
+      idempotencyKey: 'packed-changed-label-3',
+      mutations: [
+        {
+          kind: 'label',
+          authoredText: 'Set packed label revision three.',
+          value: {
+            type: 'set-label',
+            language: 'en',
+            value: 'Packed restart item revision three',
           },
-        ],
-      },
-    );
-    assert.equal(changed.changed, true);
-    entityRevision = changed.newRevision;
-  }
-  assert.equal(entityRevision, 3);
+        },
+      ],
+    },
+  );
+  assert.equal(revisionThree.changed, true);
+  assert.equal(revisionThree.newRevision, 3);
   policyRevision = (
     await successfulToolCall(origin, token, 124, 'gnolith_status', {})
   ).authorizationRevision;
+  const beforeVisibilityAdministration = await successfulToolCall(
+    origin,
+    token,
+    125,
+    'authorization_admin',
+    { version: 1, action: 'status' },
+  );
   const visibilityArguments = {
     version: 1,
     action: 'visibility-policy-set',
@@ -577,7 +612,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
   const visibility = await successfulToolCall(
     origin,
     token,
-    125,
+    126,
     'authorization_admin',
     visibilityArguments,
   );
@@ -585,12 +620,44 @@ export async function createWorkshopSemanticConfigurationDependencies(
   const visibilityReplay = await successfulToolCall(
     origin,
     token,
-    126,
+    127,
     'authorization_admin',
     visibilityArguments,
   );
   assert.equal(visibilityReplay.status, 'replayed');
-  const visibilityConflict = await mcp(origin, token, 127, 'tools/call', {
+  assert.equal(visibilityReplay.auditId, visibility.auditId);
+  const afterVisibilityAdministration = await successfulToolCall(
+    origin,
+    token,
+    128,
+    'authorization_admin',
+    { version: 1, action: 'status' },
+  );
+  assert.equal(
+    afterVisibilityAdministration.value.audits,
+    beforeVisibilityAdministration.value.audits + 1,
+  );
+  const effectiveVisibility = await successfulToolCall(
+    origin,
+    token,
+    129,
+    'authorization_admin',
+    {
+      version: 1,
+      action: 'effective-policy',
+      target: { kind: 'entity', id: 'Q900' },
+    },
+  );
+  assert.equal(effectiveVisibility.value.sourceRevision, 4);
+  assert.equal(
+    effectiveVisibility.value.sourcePolicyRevision,
+    visibility.policyRevision,
+  );
+  assert.deepEqual(
+    effectiveVisibility.value.visibility,
+    visibilityArguments.visibility,
+  );
+  const visibilityConflict = await mcp(origin, token, 130, 'tools/call', {
     name: 'authorization_admin',
     arguments: {
       ...visibilityArguments,
@@ -600,6 +667,65 @@ export async function createWorkshopSemanticConfigurationDependencies(
   assert.ok(
     visibilityConflict.error || visibilityConflict.result?.isError === true,
     JSON.stringify(visibilityConflict),
+  );
+  const outsiderBytes = Buffer.from(
+    Uint8Array.from({ length: 32 }, (_, index) => index + 120),
+  );
+  const outsiderToken = outsiderBytes.toString('base64url');
+  const outsiderDigest = createHash('sha256')
+    .update(Buffer.from('gnolith-local-bearer-v1\0', 'utf8'))
+    .update(outsiderBytes)
+    .digest('hex');
+  for (const [index, argumentsValue] of [
+    {
+      action: 'principal-create',
+      idempotencyKey: 'packed-outsider-principal-v1',
+      principal: { principalId: 'principal:outsider', enabled: true },
+    },
+    {
+      action: 'workspace-membership-add',
+      idempotencyKey: 'packed-outsider-membership-v1',
+      principalId: 'principal:outsider',
+      workspaceId: 'workspace:outsider',
+    },
+    {
+      action: 'workspace-grant-add',
+      idempotencyKey: 'packed-outsider-read-v1',
+      principalId: 'principal:outsider',
+      workspaceId: 'workspace:outsider',
+      capability: 'read',
+    },
+    {
+      action: 'credential-register',
+      idempotencyKey: 'packed-outsider-credential-v1',
+      credential: {
+        credentialId: 'credential:outsider',
+        tokenDigest: outsiderDigest,
+        principalId: 'principal:outsider',
+        workspaceId: 'workspace:outsider',
+      },
+    },
+  ].entries()) {
+    const administered = await successfulToolCall(
+      origin,
+      token,
+      131 + index,
+      'authorization_admin',
+      {
+        version: 1,
+        expectedPolicyRevision: policyRevision,
+        ...argumentsValue,
+      },
+    );
+    policyRevision = administered.policyRevision;
+  }
+  const outsiderRead = await mcp(origin, outsiderToken, 135, 'tools/call', {
+    name: 'get_entity',
+    arguments: { entityId: 'Q900' },
+  });
+  assert.ok(
+    outsiderRead.error || outsiderRead.result?.isError === true,
+    JSON.stringify(outsiderRead),
   );
   const laggedHealth = await mcp(origin, token, 5, 'tools/call', {
     name: 'search_admin',
@@ -820,6 +946,81 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ),
   );
   assert.equal(populated.format, 'gnolith-workshop-public-backup-fixture-v1');
+  const allKindMaterialization = await successfulToolCall(
+    origin,
+    token,
+    190,
+    'search_admin',
+    {
+      action: 'materialize',
+      limit: 1_000,
+      options: { maxRebuildRoots: 1_000 },
+    },
+  );
+  assert.ok(allKindMaterialization.claimed >= 7);
+  assert.equal(
+    allKindMaterialization.health.activeAppliedWatermark,
+    allKindMaterialization.health.sourceHighWatermark,
+  );
+  const publicSearchFixtures = [
+    ['item', 'Backup fixture subject', 'Q1'],
+    [
+      'resource',
+      'Inline backup fixture resource payload',
+      'resource:backup-fixture',
+    ],
+    [
+      'annotation',
+      'Backup fixture annotation body',
+      'annotation:backup-fixture',
+    ],
+    ['task', 'Complete the backup fixture task', populated.taskId],
+    ['memory', 'deterministic memory revision', 'backup-fixture-memory'],
+    ['prompt', 'deterministic prompt revision', populated.promptId],
+  ];
+  for (const [
+    index,
+    [kind, text, sourceId],
+  ] of publicSearchFixtures.entries()) {
+    const page = await successfulToolCall(
+      origin,
+      token,
+      191 + index,
+      'search',
+      { text, kinds: [kind], limit: 20 },
+    );
+    assert.ok(
+      page.items.some(
+        (entry) => entry.kind === kind && entry.sourceId === sourceId,
+      ),
+      JSON.stringify({ kind, text, sourceId, page }),
+    );
+  }
+  const statementSearches = [];
+  for (const [index, text] of [
+    'Add',
+    'fixture',
+    'statement',
+    'qualified',
+  ].entries()) {
+    statementSearches.push(
+      await successfulToolCall(origin, token, 210 + index, 'search', {
+        text,
+        kinds: ['statement'],
+        limit: 20,
+      }),
+    );
+  }
+  assert.ok(
+    statementSearches.some((page) =>
+      page.items.some(
+        (entry) =>
+          entry.kind === 'statement' &&
+          entry.sourceId === 'Q1$backup-fixture-statement',
+      ),
+    ),
+    JSON.stringify(statementSearches),
+  );
   const secondBackupTask = await successfulToolCall(
     origin,
     token,

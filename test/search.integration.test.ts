@@ -298,6 +298,22 @@ describe('Workshop external search producers', () => {
       });
       await expect(
         admin({
+          version: 1,
+          action: 'effective-policy',
+          target: { kind: 'entity', id: entity.entityId },
+        }),
+      ).resolves.toMatchObject({
+        action: 'effective-policy',
+        policyRevision: visible.policyRevision,
+        value: {
+          target: { kind: 'entity', id: entity.entityId },
+          sourceRevision: 4,
+          sourcePolicyRevision: visible.policyRevision,
+          visibility: visibilityInput.visibility,
+        },
+      });
+      await expect(
+        admin({
           ...visibilityInput,
           visibility: { version: 1, clauses: [] },
         }),
@@ -1227,7 +1243,7 @@ describe('Workshop external search producers', () => {
       await expect(
         operationPort.call(
           'search_admin',
-          { action: 'materialize', limit: 100 },
+          { action: 'materialize', limit: 1_000 },
           operationContext,
         ),
       ).resolves.toHaveProperty('completed');

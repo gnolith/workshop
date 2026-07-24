@@ -11,7 +11,7 @@ if (!origin || !token) {
 }
 
 let requestId = 1;
-const call = async (name, argumentsValue) => {
+const request = async (name, argumentsValue) => {
   const response = await fetch(`${origin.replace(/\/$/u, '')}/mcp`, {
     method: 'POST',
     headers: {
@@ -27,7 +27,10 @@ const call = async (name, argumentsValue) => {
     }),
   });
   assert.equal(response.status, 200, `${name}: HTTP ${response.status}`);
-  const body = await response.json();
+  return response.json();
+};
+const call = async (name, argumentsValue) => {
+  const body = await request(name, argumentsValue);
   assert.equal(body.result?.isError, false, `${name}: ${JSON.stringify(body)}`);
   return body.result.structuredContent;
 };
@@ -290,8 +293,14 @@ await administer({
     workspaceId,
   },
 });
-await administer({
+const auditBeforeVisibility = await call('authorization_admin', {
+  version: 1,
+  action: 'status',
+});
+const q1VisibilityArguments = {
+  version: 1,
   action: 'visibility-policy-set',
+  expectedPolicyRevision: policyRevision,
   idempotencyKey: 'backup-fixture-q1-policy-v1',
   target: { kind: 'entity', id: 'Q1' },
   expectedTargetRevision: 3,
@@ -299,6 +308,52 @@ await administer({
     version: 1,
     clauses: [[{ kind: 'workspace', workspaceId }]],
   },
+};
+const q1Visibility = await call('authorization_admin', q1VisibilityArguments);
+policyRevision = q1Visibility.policyRevision;
+const q1VisibilityReplay = await call(
+  'authorization_admin',
+  q1VisibilityArguments,
+);
+assert.equal(q1VisibilityReplay.status, 'replayed');
+assert.equal(q1VisibilityReplay.auditId, q1Visibility.auditId);
+const q1VisibilityConflict = await request('authorization_admin', {
+  ...q1VisibilityArguments,
+  visibility: { version: 1, clauses: [] },
+});
+assert.equal(
+  q1VisibilityConflict.error?.data?.code ??
+    q1VisibilityConflict.result?.structuredContent?.code,
+  'conflict',
+);
+const auditAfterVisibility = await call('authorization_admin', {
+  version: 1,
+  action: 'status',
+});
+assert.equal(
+  auditAfterVisibility.value.audits,
+  auditBeforeVisibility.value.audits + 1,
+);
+const q1AfterVisibility = await call('get_entity', { entityId: 'Q1' });
+assert.equal(q1AfterVisibility.entity.lastrevid, 4);
+const q1VisibilityRevision = await call('entity_revision', {
+  entityId: 'Q1',
+  revision: 4,
+});
+assert.match(JSON.stringify(q1VisibilityRevision), /"id":"Q1"/u);
+const q1EffectivePolicy = await call('authorization_admin', {
+  version: 1,
+  action: 'effective-policy',
+  target: { kind: 'entity', id: 'Q1' },
+});
+assert.equal(q1EffectivePolicy.value.sourceRevision, 4);
+assert.equal(
+  q1EffectivePolicy.value.sourcePolicyRevision,
+  q1Visibility.policyRevision,
+);
+assert.deepEqual(q1EffectivePolicy.value.visibility, {
+  version: 1,
+  clauses: [[{ kind: 'workspace', workspaceId }]],
 });
 
 process.stdout.write(
@@ -308,6 +363,8 @@ process.stdout.write(
     promptId: prompt.id,
     completionInput,
     delegatedToken,
+    q1Visibility,
+    q1EffectivePolicy,
     catalogDigest:
       '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224',
   })}\n`,
