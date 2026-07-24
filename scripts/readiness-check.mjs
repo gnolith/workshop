@@ -61,11 +61,32 @@ const readme = readFileSync('README.md', 'utf8');
 const architecture = readFileSync('docs/architecture-reset.md', 'utf8');
 const breaking = readFileSync('docs/breaking-0.5.md', 'utf8');
 const compatibility = readFileSync('COMPATIBILITY.md', 'utf8');
+const peerArtifacts = JSON.parse(
+  readFileSync('docs/peer-artifacts-v1.json', 'utf8'),
+);
 assert.ok(readme.includes('exactly 52 versioned operations'));
 assert.ok(architecture.includes('Schema version 11'));
 assert.ok(architecture.includes('does not inspect Taproot search tables'));
 assert.ok(breaking.includes('Schema 11 is required'));
 assert.ok(compatibility.includes('Diamond and Taproot 0.5'));
+assert.equal(peerArtifacts.format, 'gnolith-workshop-peer-artifacts-v1');
+assert.equal(peerArtifacts.version, 1);
+assert.deepEqual(
+  peerArtifacts.peers.map(({ name }) => name),
+  ['diamond', 'taproot'],
+);
+assert.equal(
+  peerArtifacts.peers[1].commit,
+  '98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac',
+);
+assert.equal(
+  peerArtifacts.peers[1].sha256,
+  '030e0bc4b58873b1ba362cc7ea0a232b769fcd5163ce7679d397c47b8f15b818',
+);
+assert.equal(
+  peerArtifacts.peers[1].canonicalEvidence.sbom.sha256,
+  'cee47a765e917037ce0c3d0c28e481d0a48c204f729e9a28dff730df6bf5f3fc',
+);
 assert.ok(existsSync('schemas/workshop-config-v1.json'));
 console.log('repository readiness invariants passed');
 

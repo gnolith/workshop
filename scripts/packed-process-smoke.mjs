@@ -35,7 +35,7 @@ try {
       dependencies: {
         '@gnolith/workshop': `file:${tarball}`,
         '@gnolith/diamond': `file:${resolve(root, '..', 'diamond', 'gnolith-diamond-0.5.0.tgz')}`,
-        '@gnolith/taproot': `file:${resolve(root, '..', 'taproot', 'gnolith-taproot-0.5.0.tgz')}`,
+        '@gnolith/taproot': `file:${resolve(root, '..', 'taproot-artifacts', 'gnolith-taproot-0.5.0.tgz')}`,
       },
     }),
   );

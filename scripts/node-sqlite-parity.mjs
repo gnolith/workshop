@@ -16,9 +16,9 @@ try {
   );
   const taprootTarball = artifact(
     'TAPROOT_TARBALL',
-    resolve('..', 'taproot', 'gnolith-taproot-0.5.0.tgz'),
+    resolve('..', 'taproot-artifacts', 'gnolith-taproot-0.5.0.tgz'),
     process.env.TAPROOT_TARBALL_SHA256 ??
-      'a685f1fa97194c54cd7b0abba6bfa8dc70587dd238edbb0601fea69ab09c047e',
+      '030e0bc4b58873b1ba362cc7ea0a232b769fcd5163ce7679d397c47b8f15b818',
   );
   const [packed] = JSON.parse(
     execFileSync(

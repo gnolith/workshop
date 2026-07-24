@@ -5,6 +5,9 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const manifest = JSON.parse(await readFile(resolve(root, 'package.json')));
+const peerArtifacts = JSON.parse(
+  await readFile(resolve(root, 'docs', 'peer-artifacts-v1.json'), 'utf8'),
+);
 const head = run('git', ['rev-parse', 'HEAD']).trim();
 if (run('git', ['status', '--porcelain']).trim())
   throw new Error('Candidate preparation requires a clean committed tree');
@@ -55,6 +58,7 @@ const inventory = {
   sbomSha256,
   catalogDigest:
     'af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f',
+  peerArtifacts,
   schemaVersion: 11,
   migrationNamespace: '@gnolith/workshop',
   migrations: await Promise.all(

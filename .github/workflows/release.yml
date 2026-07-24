@@ -80,6 +80,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Materialize checksum-bound local peer artifacts
+        run: node scripts/materialize-peer-artifacts.mjs
       - run: npm ci
       - run: npm run check
       - run: npm run release:check -- "${{ github.ref_name }}"
