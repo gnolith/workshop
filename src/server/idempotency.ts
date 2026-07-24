@@ -3,7 +3,11 @@ import type { D1DatabaseLike } from './database.js';
 import { requiredText } from './validation.js';
 
 export type WorkshopReceiptOperation =
-  'memory.delete' | 'prompt.create' | 'prompt.update' | 'prompt.delete';
+  | 'memory.upsert'
+  | 'memory.delete'
+  | 'prompt.create'
+  | 'prompt.update'
+  | 'prompt.delete';
 
 export interface WorkshopOperationReceiptBinding {
   installationId: string;
@@ -27,7 +31,7 @@ export async function prepareWorkshopOperationReceipt(
     'idempotencyKey',
     256,
   );
-  const requestDigest = await sha256(stableJson(request));
+  const requestDigest = await digestWorkshopOperationRequest(request);
   const row = await db
     .prepare(
       `SELECT subject_id, request_digest, response_json
@@ -94,7 +98,8 @@ export function workshopOperationReceiptStatement(
   eventId: string,
 ): { sql: string; values: readonly unknown[] } {
   const successfulMutation =
-    binding.operation === 'memory.delete'
+    binding.operation === 'memory.delete' ||
+    binding.operation === 'memory.upsert'
       ? `SELECT 1 FROM workshop_memories
          WHERE installation_id = ? AND slug = ? AND revision = ?
            AND search_event_id = ?`
@@ -122,6 +127,12 @@ export function workshopOperationReceiptStatement(
       eventId,
     ],
   };
+}
+
+export async function digestWorkshopOperationRequest(
+  request: unknown,
+): Promise<string> {
+  return sha256(stableJson(request));
 }
 
 function stableJson(value: unknown): string {

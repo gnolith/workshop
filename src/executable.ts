@@ -18,6 +18,11 @@ import {
   type WorkshopHttpService,
   type WorkshopHttpServiceOptions,
 } from './server/service.js';
+import {
+  configureWorkshopSemanticsV1,
+  type ConfigureWorkshopSemanticsV1Dependencies,
+  type ConfigureWorkshopSemanticsV1Input,
+} from './semantic-configuration.js';
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const MAX_PROTECTED_BYTES = 1024 * 1024;
@@ -33,6 +38,10 @@ export interface WorkshopExecutableAdapter {
     config: WorkshopServiceConfig,
     protectedReader: ProtectedReader,
   ): Promise<Omit<BootstrapWorkshopV1Dependencies, 'readProtectedCredential'>>;
+  createWorkshopSemanticConfigurationDependencies?(
+    config: WorkshopServiceConfig,
+    protectedReader: ProtectedReader,
+  ): Promise<ConfigureWorkshopSemanticsV1Dependencies>;
 }
 
 export type ProtectedReader = (
@@ -89,6 +98,22 @@ export async function runWorkshopBootstrap(
     ...dependencies,
     readProtectedCredential: (selector) => readProtectedSelector(selector),
   });
+}
+
+export async function runWorkshopSemanticConfiguration(
+  configPath: string,
+  input: ConfigureWorkshopSemanticsV1Input,
+): Promise<unknown> {
+  const config = await loadWorkshopServiceConfig(configPath);
+  const adapter = await loadAdapter(config.adapterModule, configPath);
+  if (!adapter.createWorkshopSemanticConfigurationDependencies)
+    throw invalid('Adapter does not support configure-semantics-v1');
+  const dependencies =
+    await adapter.createWorkshopSemanticConfigurationDependencies(
+      config,
+      readProtectedSelector,
+    );
+  return configureWorkshopSemanticsV1(input, dependencies);
 }
 
 export async function readProtectedSelector(

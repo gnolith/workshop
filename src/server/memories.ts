@@ -470,7 +470,6 @@ export class MemoryService {
     const context = await this.#context(authorization, 'memory:write');
     const key = requiredText(idempotencyKey, 'idempotencyKey', 256);
     const workspaceId = requireActiveWorkspace(context);
-    const storedIdempotencyKey = `${workspaceId}\u0000${context.principalId}\u0000${key}`;
     const slug = memorySlug(slugValue);
     const description = requiredText(
       input.description,
@@ -482,10 +481,73 @@ export class MemoryService {
       'content',
       this.#limits.maxMemoryBytes,
     );
-    const scope = normalizeVisibilityScope(
-      input.visibility ?? defaultVisibility(context),
+    const title =
+      input.title === undefined
+        ? undefined
+        : requiredText(input.title, 'title', this.#limits.maxDescriptionBytes);
+    const applicability =
+      input.applicability === undefined
+        ? undefined
+        : jsonObject(
+            input.applicability,
+            'applicability',
+            this.#limits.maxDescriptionBytes,
+          );
+    const provenance =
+      input.provenance === undefined
+        ? undefined
+        : jsonObject(
+            input.provenance,
+            'provenance',
+            this.#limits.maxDescriptionBytes,
+          );
+    const language =
+      input.language === undefined
+        ? undefined
+        : requiredText(input.language, 'language', 64);
+    const attribution =
+      input.attribution === undefined
+        ? undefined
+        : jsonObject(
+            input.attribution,
+            'attribution',
+            this.#limits.maxDescriptionBytes,
+          );
+    const requestedScope =
+      input.visibility === undefined
+        ? undefined
+        : normalizeVisibilityScope(input.visibility);
+    const expected = revisionPrecondition(input);
+    const binding = {
+      installationId: context.installationId,
+      principalId: context.principalId,
+      operation: 'memory.upsert' as const,
+      idempotencyKey: key,
+    };
+    const request = {
+      slug,
+      description,
+      content,
+      ...(title === undefined ? {} : { title }),
+      ...(applicability === undefined ? {} : { applicability }),
+      ...(provenance === undefined ? {} : { provenance }),
+      ...(language === undefined ? {} : { language }),
+      ...(attribution === undefined ? {} : { attribution }),
+      ...(requestedScope === undefined ? {} : { visibility: requestedScope }),
+      ...(input.expectedRevision === undefined
+        ? {}
+        : { expectedRevision: input.expectedRevision }),
+      ...(input.expectedUpdatedAt === undefined
+        ? {}
+        : { expectedUpdatedAt: input.expectedUpdatedAt }),
+    };
+    const prepared = await prepareWorkshopOperationReceipt(
+      this.db,
+      binding,
+      request,
     );
-    const now = this.#clock().toISOString();
+    if (prepared.replay)
+      return authorizedReceiptMemory(prepared.replay, context, slug);
     return observed(
       this.options.observe,
       {
@@ -493,130 +555,160 @@ export class MemoryService {
         principalId: context.principalId,
       },
       async () => {
-        const visibility = visibilitySql('workshop_memories', context);
-        const existing = await this.db
+        const predicate = visibilitySql('workshop_memories', context);
+        const row = await this.db
           .prepare(
             `SELECT * FROM workshop_memories
-             WHERE idempotency_key = ? AND deleted_at IS NULL AND ${visibility.sql}`,
-          )
-          .bind(storedIdempotencyKey, ...visibility.values)
-          .first<MemoryRow>();
-        if (existing) {
-          if (
-            existing.slug === slug &&
-            existing.description === description &&
-            existing.content === content &&
-            existing.visibility_scope === serializeVisibilityScope(scope)
-          ) {
-            await this.#recheck(existing, context);
-            return toMemory(existing);
-          }
-          throw new WorkshopError(
-            'conflict',
-            `Idempotent memory input conflicts with existing content`,
-          );
-        }
-        const occupied = await this.db
-          .prepare(
-            `SELECT slug FROM workshop_memories
              WHERE installation_id = ? AND slug = ? AND deleted_at IS NULL
-               AND ${visibility.sql}`,
+               AND ${predicate.sql}`,
           )
-          .bind(context.installationId, slug, ...visibility.values)
-          .first<{ slug: string }>();
-        if (occupied)
-          throw new WorkshopError(
-            'conflict',
-            `Idempotent memory input conflicts with existing content`,
-          );
+          .bind(context.installationId, slug, ...predicate.values)
+          .first<MemoryRow>();
+        if (expected && !row) throw denied();
+        if (
+          requestedScope &&
+          row &&
+          row.owner_principal_id !== context.principalId &&
+          !context.capabilities.includes('admin')
+        )
+          throw denied();
+        const current = row ? toMemory(row) : null;
+        if (
+          expected &&
+          current &&
+          (expected.column === 'revision'
+            ? current.revision !== expected.value
+            : current.updatedAt !== expected.value)
+        )
+          throw new WorkshopError('conflict', 'Memory state changed');
+        const scope =
+          requestedScope ?? current?.visibility ?? defaultVisibility(context);
+        const policyChanged = current
+          ? serializeVisibilityScope(scope) !==
+            serializeVisibilityScope(current.visibility)
+          : false;
+        const now = this.#clock().toISOString();
         const eventId = crypto.randomUUID();
         const next: Memory = {
           slug,
-          title: input.title ?? description,
+          title: title ?? current?.title ?? description,
           description,
           content,
-          applicability: input.applicability ?? {},
-          provenance: input.provenance ?? {},
-          language: input.language ?? 'en',
-          attribution: input.attribution ?? {},
-          createdAt: now,
-          updatedAt: now,
-          revision: 1,
-          policyRevision: 1,
+          applicability: applicability ?? current?.applicability ?? {},
+          provenance: provenance ?? current?.provenance ?? {},
+          language: language ?? current?.language ?? 'en',
+          attribution: attribution ?? current?.attribution ?? {},
+          createdAt: current?.createdAt ?? now,
+          updatedAt: current ? nextTimestamp(now, current.updatedAt) : now,
+          revision: (current?.revision ?? 0) + 1,
+          policyRevision: current
+            ? current.policyRevision + (policyChanged ? 1 : 0)
+            : 1,
           installationId: context.installationId,
-          ownerPrincipalId: context.principalId,
-          workspaceId,
+          ownerPrincipalId: current?.ownerPrincipalId ?? context.principalId,
+          workspaceId: current?.workspaceId ?? workspaceId,
           visibility: scope,
           authorizationRevision: context.authorizationRevision,
         };
-        let inserted: MemoryRow | null;
-        try {
-          inserted = await this.#commitCanonical(
-            context,
-            next,
-            'memory.create',
-            null,
-            {
-              sql: `INSERT INTO workshop_memories
-             (slug, idempotency_key, title, description, content, applicability_json,
-              provenance_json, language, attribution_json, created_at, updated_at, revision,
-              policy_revision, installation_id, owner_principal_id, workspace_id, visibility_scope,
-              authorization_revision, search_event_id, search_event_sequence)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, NULL) RETURNING *`,
-              values: [
-                slug,
-                storedIdempotencyKey,
-                next.title,
-                description,
-                content,
-                JSON.stringify(next.applicability),
-                JSON.stringify(next.provenance),
-                next.language,
-                JSON.stringify(next.attribution),
-                now,
-                now,
-                context.installationId,
-                context.principalId,
-                workspaceId,
-                serializeVisibilityScope(scope),
-                context.authorizationRevision,
-                eventId,
-              ],
-            },
-            eventId,
-          );
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            !/UNIQUE constraint failed/iu.test(error.message)
-          )
-            throw error;
-          inserted = null;
-        }
-        if (inserted) {
-          authorizeRecord(toAuthorizationRecord(inserted), context);
-          return toMemory(inserted);
-        }
-        const raced = await this.db
-          .prepare(
-            `SELECT * FROM workshop_memories
-             WHERE idempotency_key = ? AND ${visibility.sql}`,
-          )
-          .bind(storedIdempotencyKey, ...visibility.values)
-          .first<MemoryRow>();
-        if (
-          raced?.slug === slug &&
-          raced.description === description &&
-          raced.content === content &&
-          raced.visibility_scope === serializeVisibilityScope(scope)
-        ) {
-          await this.#recheck(raced, context);
-          return toMemory(raced);
-        }
-        throw new WorkshopError(
-          'conflict',
-          `Idempotent memory input conflicts with existing content`,
+        const receiptStatement = workshopOperationReceiptStatement(
+          binding,
+          prepared.requestDigest,
+          slug,
+          next,
+          now,
+          next.revision,
+          eventId,
         );
+        let committed: MemoryRow | null;
+        try {
+          committed = current
+            ? await this.#commitCanonical(
+                context,
+                next,
+                policyChanged ? 'memory.policy' : 'memory.update',
+                await this.#predecessor(slug, context),
+                {
+                  sql: `UPDATE workshop_memories SET title = ?, description = ?, content = ?,
+                    applicability_json = ?, provenance_json = ?, language = ?, attribution_json = ?,
+                    visibility_scope = ?, authorization_revision = ?, policy_revision = ?, revision = ?,
+                    updated_at = ?, search_event_id = ?, search_event_sequence = NULL
+                    WHERE installation_id = ? AND slug = ? AND revision = ? AND deleted_at IS NULL
+                      ${expected ? `AND ${expected.column} = ?` : ''} AND ${predicate.sql}
+                    RETURNING *`,
+                  values: [
+                    next.title,
+                    next.description,
+                    next.content,
+                    JSON.stringify(next.applicability),
+                    JSON.stringify(next.provenance),
+                    next.language,
+                    JSON.stringify(next.attribution),
+                    serializeVisibilityScope(scope),
+                    context.authorizationRevision,
+                    next.policyRevision,
+                    next.revision,
+                    next.updatedAt,
+                    eventId,
+                    context.installationId,
+                    slug,
+                    current.revision,
+                    ...(expected ? [expected.value] : []),
+                    ...predicate.values,
+                  ],
+                },
+                eventId,
+                [receiptStatement],
+              )
+            : await this.#commitCanonical(
+                context,
+                next,
+                'memory.create',
+                null,
+                {
+                  sql: `INSERT INTO workshop_memories
+                    (slug, idempotency_key, title, description, content, applicability_json,
+                     provenance_json, language, attribution_json, created_at, updated_at, revision,
+                     policy_revision, installation_id, owner_principal_id, workspace_id,
+                     visibility_scope, authorization_revision, search_event_id, search_event_sequence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?, NULL)
+                    RETURNING *`,
+                  values: [
+                    slug,
+                    `${workspaceId}\u0000${context.principalId}\u0000${key}`,
+                    next.title,
+                    description,
+                    content,
+                    JSON.stringify(next.applicability),
+                    JSON.stringify(next.provenance),
+                    next.language,
+                    JSON.stringify(next.attribution),
+                    now,
+                    now,
+                    context.installationId,
+                    context.principalId,
+                    workspaceId,
+                    serializeVisibilityScope(scope),
+                    context.authorizationRevision,
+                    eventId,
+                  ],
+                },
+                eventId,
+                [receiptStatement],
+              );
+        } catch (error) {
+          const raced = await waitForWorkshopOperationReceipt(
+            this.db,
+            binding,
+            request,
+          );
+          if (raced.replay)
+            return authorizedReceiptMemory(raced.replay, context, slug);
+          throw error;
+        }
+        if (!committed)
+          throw new WorkshopError('conflict', 'Memory state changed', 409);
+        authorizeRecord(toAuthorizationRecord(committed), context);
+        return toMemory(committed);
       },
     );
   }
@@ -851,6 +943,10 @@ export class MemoryService {
     predecessor: { eventId: string; sequence: number } | null,
     mutation: { sql: string; values: readonly unknown[] },
     eventId: string,
+    additionalStatements: readonly {
+      sql: string;
+      values: readonly unknown[];
+    }[] = [],
   ): Promise<MemoryRow | null> {
     const receipt = await commitWorkshopCanonicalSearchMutationV1(
       this.#search(),
@@ -872,6 +968,7 @@ export class MemoryService {
             eventId,
             next.updatedAt,
           ),
+          ...additionalStatements,
         ],
       },
     );

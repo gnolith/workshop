@@ -55,16 +55,16 @@ const migrationIds = readdirSync('migrations')
   .map((name) => name.replace(/\.sql$/u, ''));
 assert.equal(new Set(migrationIds).size, migrationIds.length);
 assert.deepEqual(migrationIds, [...migrationIds].sort());
-assert.equal(migrationIds.at(-1), '0009_operation_receipts');
+assert.equal(migrationIds.at(-1), '0011_administration_control_plane');
 
 const readme = readFileSync('README.md', 'utf8');
 const architecture = readFileSync('docs/architecture-reset.md', 'utf8');
 const breaking = readFileSync('docs/breaking-0.5.md', 'utf8');
 const compatibility = readFileSync('COMPATIBILITY.md', 'utf8');
-assert.ok(readme.includes('exactly 51 version-1 operations'));
-assert.ok(architecture.includes('Schema version 9'));
+assert.ok(readme.includes('exactly 52 versioned operations'));
+assert.ok(architecture.includes('Schema version 11'));
 assert.ok(architecture.includes('does not inspect Taproot search tables'));
-assert.ok(breaking.includes('Schema 9 is required'));
+assert.ok(breaking.includes('Schema 11 is required'));
 assert.ok(compatibility.includes('Diamond and Taproot 0.5'));
 assert.ok(existsSync('schemas/workshop-config-v1.json'));
 console.log('repository readiness invariants passed');

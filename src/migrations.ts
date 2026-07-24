@@ -256,6 +256,8 @@ function packageVersionForSchema(version: number): string | undefined {
     case 7:
     case 8:
     case 9:
+    case 10:
+    case 11:
       return '0.5.0';
     default:
       return undefined;
@@ -433,6 +435,13 @@ async function validateCanonicalSearchSchema(
     )
     .all<{ name: string; sql: string }>();
   const expectedTables = [
+    ...(installed >= 11
+      ? [
+          'workshop_authorization_admin_receipts',
+          'workshop_authorization_audit',
+          'workshop_authorization_principals',
+        ]
+      : []),
     ...(installed >= 8
       ? ['workshop_bootstrap_receipts', 'workshop_credentials']
       : []),
@@ -440,17 +449,25 @@ async function validateCanonicalSearchSchema(
     'workshop_cursor_snapshots',
     'workshop_memories',
     'workshop_memory_revisions',
+    ...(installed >= 11 ? ['workshop_oauth_bindings'] : []),
     'workshop_onboarding_runs',
     'workshop_onboarding_steps',
     ...(installed >= 9 ? ['workshop_operation_receipts'] : []),
     'workshop_prompt_revisions',
     'workshop_prompts',
     'workshop_schema',
+    ...(installed >= 11
+      ? [
+          'workshop_semantic_configuration_receipts',
+          'workshop_semantic_configuration_state',
+        ]
+      : []),
     ...(installed >= 7
       ? ['workshop_task_lease_events', 'workshop_task_lease_receipts']
       : []),
     'workshop_task_revisions',
     'workshop_tasks',
+    ...(installed >= 11 ? ['workshop_workspace_memberships'] : []),
   ];
   const actualTables = tables.results.map(({ name }) => name);
   if (JSON.stringify(actualTables) !== JSON.stringify(expectedTables))
@@ -533,12 +550,16 @@ async function validateCanonicalSearchSchema(
     )
     .all<{ name: string }>();
   const requiredIndexes = [
+    ...(installed >= 11
+      ? ['workshop_authorization_audit_installation_idx']
+      : []),
     ...(installed >= 8 ? ['workshop_credentials_principal_idx'] : []),
     'workshop_cursor_snapshots_expiry_idx',
     'workshop_memories_authorization_idx',
     'workshop_memories_idempotency_idx',
     'workshop_memories_updated_idx',
     'workshop_memory_revisions_history_idx',
+    ...(installed >= 11 ? ['workshop_oauth_bindings_principal_idx'] : []),
     'workshop_onboarding_runs_state_idx',
     'workshop_onboarding_steps_state_idx',
     ...(installed >= 9 ? ['workshop_operation_receipts_subject_idx'] : []),

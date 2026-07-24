@@ -327,6 +327,13 @@ describe('D1 integration and concurrency', () => {
         'memory-key',
       ),
     ).rejects.toMatchObject({ code: 'conflict' });
+    const updated = await runtime.memories.putIdempotent(
+      'stable-memory',
+      input,
+      TEST_AUTHORIZATION,
+      'other-key',
+    );
+    expect(updated).toMatchObject({ revision: 2, content: 'Exact content' });
     await expect(
       runtime.memories.putIdempotent(
         'stable-memory',
@@ -334,10 +341,10 @@ describe('D1 integration and concurrency', () => {
         TEST_AUTHORIZATION,
         'other-key',
       ),
-    ).rejects.toMatchObject({ code: 'conflict' });
+    ).resolves.toEqual(updated);
     await runtime.memories.upsert(
       'stable-memory',
-      { ...input, content: 'Human edit', expectedRevision: first.revision },
+      { ...input, content: 'Human edit', expectedRevision: updated.revision },
       TEST_AUTHORIZATION,
     );
     await expect(
@@ -347,6 +354,6 @@ describe('D1 integration and concurrency', () => {
         TEST_AUTHORIZATION,
         'memory-key',
       ),
-    ).rejects.toMatchObject({ code: 'conflict' });
+    ).resolves.toEqual(first);
   });
 });

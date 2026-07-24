@@ -1,6 +1,7 @@
 export type WorkshopErrorCode =
   | 'bad_request'
   | 'validation_failed'
+  | 'invalid_cursor'
   | 'unauthenticated'
   | 'forbidden'
   | 'not_found'
@@ -48,6 +49,7 @@ function statusForCode(code: WorkshopErrorCode): number {
   switch (code) {
     case 'bad_request':
     case 'validation_failed':
+    case 'invalid_cursor':
     case 'query_rejected':
       return 400;
     case 'unauthenticated':

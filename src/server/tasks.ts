@@ -56,6 +56,7 @@ import {
   requiredText,
   validation,
 } from './validation.js';
+import { digestWorkshopOperationRequest } from './idempotency.js';
 
 const LEASE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const LEASE_DIGEST_PREFIX = new TextEncoder().encode(
@@ -877,13 +878,15 @@ export class TaskService {
       updatedAt: nextTimestamp(claimedAt, current.updatedAt),
       authorizationRevision: context.authorizationRevision,
     };
-    const row = await this.#commitCanonical(
-      context,
-      next,
-      'task.state',
-      await this.#predecessor(id, context),
-      {
-        sql: `UPDATE workshop_tasks
+    let row: TaskRow | null;
+    try {
+      row = await this.#commitCanonical(
+        context,
+        next,
+        'task.state',
+        await this.#predecessor(id, context),
+        {
+          sql: `UPDATE workshop_tasks
            SET claimed = 1, claimed_at = ?, lease_id = ?,
                lease_token_digest = ?, lease_owner_principal_id = ?,
                lease_expires_at = ?, revision = revision + 1,
@@ -893,46 +896,63 @@ export class TaskService {
              AND (lease_id IS NULL OR lease_expires_at <= ?)
              AND ${predicate.sql}
            RETURNING *`,
-        values: [
-          next.claimedAt,
-          leaseId,
-          tokenDigest,
-          context.principalId,
-          expiresAt,
-          context.authorizationRevision,
-          next.updatedAt,
-          eventId,
-          id,
-          current.revision,
-          claimedAt,
-          ...predicate.values,
-        ],
-      },
-      eventId,
-      [
-        {
-          sql: `INSERT INTO workshop_task_lease_events
+          values: [
+            next.claimedAt,
+            leaseId,
+            tokenDigest,
+            context.principalId,
+            expiresAt,
+            context.authorizationRevision,
+            next.updatedAt,
+            eventId,
+            id,
+            current.revision,
+            claimedAt,
+            ...predicate.values,
+          ],
+        },
+        eventId,
+        [
+          {
+            sql: `INSERT INTO workshop_task_lease_events
            (event_id, installation_id, task_id, lease_id, actor_principal_id,
             event_kind, task_revision, lease_expires_at, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          values: [
-            eventId,
-            context.installationId,
-            id,
-            leaseId,
-            context.principalId,
-            priorLease?.lease_id &&
-            priorLease.lease_expires_at &&
-            priorLease.lease_expires_at <= claimedAt
-              ? 'reclaimed_expired'
-              : 'claimed',
-            next.revision,
-            expiresAt,
-            claimedAt,
-          ],
-        },
-      ],
-    );
+            values: [
+              eventId,
+              context.installationId,
+              id,
+              leaseId,
+              context.principalId,
+              priorLease?.lease_id &&
+              priorLease.lease_expires_at &&
+              priorLease.lease_expires_at <= claimedAt
+                ? 'reclaimed_expired'
+                : 'claimed',
+              next.revision,
+              expiresAt,
+              claimedAt,
+            ],
+          },
+        ],
+      );
+    } catch (error) {
+      if (
+        await this.#claimRaceLost(
+          id,
+          context.installationId,
+          current.revision,
+          claimedAt,
+          error,
+        )
+      )
+        throw new WorkshopError(
+          'conflict',
+          'Task is unavailable or has an active lease',
+          409,
+        );
+      throw error;
+    }
     if (!row)
       throw new WorkshopError(
         'conflict',
@@ -940,6 +960,50 @@ export class TaskService {
         409,
       );
     return { task: toTask(row), leaseId, leaseToken, expiresAt };
+  }
+
+  async #claimRaceLost(
+    taskId: string,
+    installationId: string,
+    expectedRevision: number,
+    claimedAt: string,
+    cause: unknown,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const row = await this.db
+          .prepare(
+            `SELECT revision, lease_id, lease_expires_at
+             FROM workshop_tasks
+             WHERE id = ? AND installation_id = ?`,
+          )
+          .bind(taskId, installationId)
+          .first<{
+            revision: number;
+            lease_id: string | null;
+            lease_expires_at: string | null;
+          }>();
+        if (
+          row &&
+          (row.revision !== expectedRevision ||
+            (row.lease_id !== null &&
+              row.lease_expires_at !== null &&
+              row.lease_expires_at > claimedAt))
+        )
+          return true;
+      } catch {
+        // A concurrent native transaction may still hold the database lock.
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 5 * (attempt + 1));
+      });
+    }
+    return (
+      cause instanceof Error &&
+      /SQLITE_BUSY|database is locked|constraint failed|transaction conflict/iu.test(
+        cause.message,
+      )
+    );
   }
 
   async releaseLease(
@@ -966,9 +1030,18 @@ export class TaskService {
         400,
       );
     const context = await this.#context(authorization, 'task:write');
+    const tokenBytes = decodeLeaseToken(leaseToken);
+    const tokenDigest = await digestLeaseToken(tokenBytes);
+    tokenBytes.fill(0);
+    const requestDigest = await digestWorkshopOperationRequest({
+      operation: 'release',
+      taskId,
+      leaseTokenDigest: tokenDigest,
+      expectedRevision,
+    });
     const replay = await this.db
       .prepare(
-        `SELECT task_id, operation, expected_revision, receipt_json
+        `SELECT task_id, operation, expected_revision, request_digest, receipt_json
          FROM workshop_task_lease_receipts
          WHERE installation_id = ? AND principal_id = ? AND idempotency_key = ?`,
       )
@@ -977,13 +1050,15 @@ export class TaskService {
         task_id: string;
         operation: string;
         expected_revision: number;
+        request_digest: string | null;
         receipt_json: string;
       }>();
     if (replay) {
       if (
         replay.task_id !== taskId ||
         replay.operation !== 'release' ||
-        replay.expected_revision !== expectedRevision
+        replay.expected_revision !== expectedRevision ||
+        replay.request_digest !== requestDigest
       )
         throw new WorkshopError(
           'conflict',
@@ -995,9 +1070,6 @@ export class TaskService {
         replayed: true,
       };
     }
-    const tokenBytes = decodeLeaseToken(leaseToken);
-    const tokenDigest = await digestLeaseToken(tokenBytes);
-    tokenBytes.fill(0);
     const now = this.#clock().toISOString();
     const predicate = visibilitySql('workshop_tasks', context);
     const current = await this.#getForMutation(taskId, context);
@@ -1060,8 +1132,8 @@ export class TaskService {
         {
           sql: `INSERT INTO workshop_task_lease_receipts
            (installation_id, principal_id, idempotency_key, task_id, operation,
-            expected_revision, resulting_revision, receipt_json, created_at)
-           VALUES (?, ?, ?, ?, 'release', ?, ?, ?, ?)`,
+            expected_revision, resulting_revision, request_digest, receipt_json, created_at)
+           VALUES (?, ?, ?, ?, 'release', ?, ?, ?, ?, ?)`,
           values: [
             context.installationId,
             context.principalId,
@@ -1069,6 +1141,7 @@ export class TaskService {
             taskId,
             expectedRevision,
             next.revision,
+            requestDigest,
             JSON.stringify(receipt),
             now,
           ],
@@ -1113,6 +1186,7 @@ export class TaskService {
         idempotencyKey: string;
         leaseId: string;
         createdAt: string;
+        requestDigest: string;
       };
     },
   ): Promise<Task> {
@@ -1185,8 +1259,8 @@ export class TaskService {
                   {
                     sql: `INSERT INTO workshop_task_lease_receipts
                      (installation_id, principal_id, idempotency_key, task_id, operation,
-                      expected_revision, resulting_revision, receipt_json, created_at)
-                     VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?)`,
+                      expected_revision, resulting_revision, request_digest, receipt_json, created_at)
+                     VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?)`,
                     values: [
                       context.installationId,
                       context.principalId,
@@ -1194,6 +1268,7 @@ export class TaskService {
                       id,
                       lease.expectedRevision,
                       next.revision,
+                      lease.receipt.requestDigest,
                       JSON.stringify(next),
                       lease.receipt.createdAt,
                     ],
@@ -1270,9 +1345,30 @@ export class TaskService {
         400,
       );
     const context = await this.#context(authorization, 'task:write');
+    const leaseToken = requiredText(input.leaseToken, 'leaseToken', 4096);
+    const tokenBytes = decodeLeaseToken(leaseToken);
+    const tokenDigest = await digestLeaseToken(tokenBytes);
+    tokenBytes.fill(0);
+    const outcome = normalizeOutcome({
+      result: input.result,
+      kind: input.outcomeKind ?? 'success',
+    });
+    const result = requiredText(
+      outcome.result,
+      'result',
+      this.#limits.maxResultBytes,
+    );
+    const requestDigest = await digestWorkshopOperationRequest({
+      operation: 'complete',
+      taskId,
+      leaseTokenDigest: tokenDigest,
+      expectedRevision,
+      result,
+      outcomeKind: outcome.kind,
+    });
     const replay = await this.db
       .prepare(
-        `SELECT task_id, operation, expected_revision, receipt_json
+        `SELECT task_id, operation, expected_revision, request_digest, receipt_json
          FROM workshop_task_lease_receipts
          WHERE installation_id = ? AND principal_id = ? AND idempotency_key = ?`,
       )
@@ -1281,13 +1377,15 @@ export class TaskService {
         task_id: string;
         operation: string;
         expected_revision: number;
+        request_digest: string | null;
         receipt_json: string;
       }>();
     if (replay) {
       if (
         replay.task_id !== taskId ||
         replay.operation !== 'complete' ||
-        replay.expected_revision !== expectedRevision
+        replay.expected_revision !== expectedRevision ||
+        replay.request_digest !== requestDigest
       )
         throw new WorkshopError(
           'conflict',
@@ -1296,10 +1394,6 @@ export class TaskService {
         );
       return JSON.parse(replay.receipt_json) as Task;
     }
-    const leaseToken = requiredText(input.leaseToken, 'leaseToken', 4096);
-    const tokenBytes = decodeLeaseToken(leaseToken);
-    const tokenDigest = await digestLeaseToken(tokenBytes);
-    tokenBytes.fill(0);
     const now = this.#clock().toISOString();
     const priorLease = await this.db
       .prepare(
@@ -1311,8 +1405,8 @@ export class TaskService {
     const task = await this.complete(
       taskId,
       {
-        result: input.result,
-        kind: input.outcomeKind ?? 'success',
+        result,
+        kind: outcome.kind,
       },
       context,
       false,
@@ -1325,6 +1419,7 @@ export class TaskService {
           idempotencyKey,
           leaseId: priorLease?.lease_id ?? taskId,
           createdAt: now,
+          requestDigest,
         },
       },
     );

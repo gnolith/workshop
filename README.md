@@ -36,8 +36,26 @@ gnolith-workshop bootstrap-v1 \
 The local bearer credential file must contain exactly 32 random bytes encoded
 as unpadded base64url, optionally followed by one LF. The token is never a
 command argument and only its domain-separated digest is persisted.
-Bootstrap requires Workshop schema version 9 and commits that credential digest
+Bootstrap requires Workshop schema version 11 and commits that credential digest
 plus an owner receipt through Taproot's sealed owner-adapter API.
+
+Offline semantic configuration also runs before the listener:
+
+```sh
+gnolith-workshop configure-semantics-v1 \
+  --config /run/gnolith/workshop.json \
+  --input /run/gnolith/semantic-configuration.json
+```
+
+The input contains only declarative provider/vector identities and protected
+credential selector IDs. It never contains credential bytes. Configuration can
+be persisted while unavailable; `gnolith_status.semanticState.ready` becomes
+true only after the selected generation is actually ready, while lexical search
+remains available.
+
+Verified Waystone assets should use the exported `/app` mount recommendation.
+The root, `/mcp`, `/health`, `/api`, and `/.well-known` namespaces cannot be
+used or shadowed by an asset mount.
 
 Local resource payload backup and restore use the public server-only factory:
 
@@ -56,7 +74,7 @@ to Workshop.
 ## Protocol
 
 The sole MCP identity is `gnolith`. The generated operation contract contains
-exactly 51 version-1 operations and is checked into
+exactly 52 versioned operations and is checked into
 `schemas/gnolith-operations-v1.json`. The same generated registry drives MCP,
 the BFF, runtime validation, and the generic browser-safe client:
 

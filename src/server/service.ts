@@ -286,7 +286,6 @@ function startupReady(status: WorkshopStatusSnapshot): boolean {
     status.compatibility.taproot &&
     status.canonicalReady &&
     status.authorizationReady &&
-    status.lexicalReady &&
     status.producers.ready &&
     status.blobReady
   );

@@ -5,14 +5,19 @@ import { join } from 'node:path';
 import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
 import {
   bootstrapTaprootAuthorization,
+  commitAuthorizationBootstrapV1,
+  createAuthorizationCursorCodec,
   createTaprootHostWriteCapability,
   initializeTaproot,
+  prepareAuthorizationBootstrapV1,
+  registerAuthorizationBootstrapOwnerV1,
 } from '@gnolith/taproot';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyWorkshopMigrations } from '../src/migrations.js';
 import type { AuthorizationContext } from '../src/protocol.js';
 import { createWorkshopCore } from '../src/server/context.js';
 import { createWorkshopSearchIntegrationV1 } from '../src/server/search.js';
+import { createWorkshopTaprootOperationPortV1 } from '../src/taproot-operation.js';
 import type {
   D1DatabaseLike,
   D1PreparedStatementLike,
@@ -30,6 +35,449 @@ afterEach(async () => {
 });
 
 describe('Workshop external search producers', () => {
+  it('coordinates authorization administration with durable Workshop owner state', async () => {
+    const path = join(tmpdir(), `workshop-admin-${randomUUID()}.sqlite`);
+    paths.push(path);
+    const db = new NodeSqliteDatabase(path);
+    const workshopDb = db as unknown as D1DatabaseLike;
+    const taproot = { baseIri: 'https://workshop-admin.test/' };
+    const installationId = 'installation:admin-test';
+    try {
+      await initializeTaproot(db, taproot);
+      await applyWorkshopMigrations(workshopDb);
+      const hostKey = await crypto.subtle.generateKey(
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+      const hostAuthority = createTaprootHostWriteCapability(
+        db,
+        taproot,
+        hostKey,
+      );
+      const bootstrapOwner = await registerAuthorizationBootstrapOwnerV1(
+        db,
+        taproot,
+        hostAuthority,
+        {
+          installationId,
+          ownerRegistrationId: 'workshop-admin-test-bootstrap',
+          adapter: {
+            kind: 'taproot-authorization-bootstrap-owner-adapter-v1',
+            async prepare() {
+              return {
+                statements: [],
+                receipt: { format: 'workshop-admin-test-owner-v1' },
+              };
+            },
+          },
+        },
+      );
+      const bootstrapParticipant = await prepareAuthorizationBootstrapV1(
+        db,
+        taproot,
+        hostAuthority,
+        {
+          installationId,
+          baseIri: taproot.baseIri,
+          principalId: 'principal:owner',
+          workspaceId: 'workspace:admin-test',
+          grants: [
+            'admin',
+            'knowledge:policy',
+            'knowledge:write',
+            'read',
+            'search:admin',
+          ],
+          idempotencyKey: 'admin-test-bootstrap-v1',
+        },
+      );
+      const bootstrapReceipt = await commitAuthorizationBootstrapV1(
+        bootstrapParticipant,
+        await bootstrapOwner.seal(bootstrapParticipant, {}),
+      );
+      const cursorKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt'],
+      );
+      const port = await createWorkshopTaprootOperationPortV1({
+        kind: 'workshop-taproot-assembly-v1',
+        db: workshopDb,
+        installationId,
+        taprootOptions: taproot,
+        hostAuthority,
+        cursorCodec: createAuthorizationCursorCodec(cursorKey),
+        async status() {
+          throw new Error('unused');
+        },
+      });
+      const context = {
+        principal: {
+          installationId,
+          principalId: 'principal:owner',
+          credentialId: 'credential:owner',
+          activeWorkspaceId: 'workspace:admin-test',
+          workspaceIds: ['workspace:admin-test'],
+          capabilities: [
+            'admin',
+            'knowledge:policy',
+            'knowledge:write',
+            'read',
+            'search:admin',
+          ],
+          authorizationRevision: bootstrapReceipt.authorizationRevision,
+        },
+        requestId: 'request:admin-test',
+        signal: new AbortController().signal,
+      };
+      const created = (await port.call(
+        'authorization_admin',
+        {
+          version: 1,
+          action: 'principal-create',
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          idempotencyKey: 'principal-worker-v1',
+          principal: { principalId: 'principal:worker', enabled: true },
+        },
+        context,
+      )) as { status: string; policyRevision: number };
+      expect(created).toMatchObject({
+        status: 'committed',
+        target: { kind: 'principal', id: 'principal:worker' },
+      });
+      context.principal.authorizationRevision = created.policyRevision;
+      await expect(
+        port.call(
+          'authorization_admin',
+          {
+            version: 1,
+            action: 'principal-create',
+            expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
+            idempotencyKey: 'principal-worker-v1',
+            principal: { principalId: 'principal:worker', enabled: true },
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ status: 'replayed' });
+      await expect(
+        port.call(
+          'authorization_admin',
+          {
+            version: 1,
+            action: 'principal-create',
+            expectedPolicyRevision: bootstrapReceipt.authorizationRevision,
+            idempotencyKey: 'principal-worker-v1',
+            principal: { principalId: 'principal:other', enabled: true },
+          },
+          context,
+        ),
+      ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+
+      const registered = (await port.call(
+        'authorization_admin',
+        {
+          version: 1,
+          action: 'credential-register',
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          idempotencyKey: 'credential-worker-v1',
+          credential: {
+            credentialId: 'credential:worker',
+            tokenDigest: 'a'.repeat(64),
+            principalId: 'principal:worker',
+            workspaceId: 'workspace:admin-test',
+          },
+        },
+        context,
+      )) as { policyRevision: number };
+      context.principal.authorizationRevision = registered.policyRevision;
+      await expect(
+        workshopDb
+          .prepare(
+            `SELECT token_digest, disabled FROM workshop_credentials
+             WHERE installation_id = ? AND credential_id = ?`,
+          )
+          .bind(installationId, 'credential:worker')
+          .first(),
+      ).resolves.toEqual({ token_digest: 'a'.repeat(64), disabled: 0 });
+
+      const disabled = (await port.call(
+        'authorization_admin',
+        {
+          version: 1,
+          action: 'principal-disable',
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          idempotencyKey: 'disable-worker-v1',
+          principalId: 'principal:worker',
+        },
+        context,
+      )) as { policyRevision: number };
+      context.principal.authorizationRevision = disabled.policyRevision;
+      await expect(
+        workshopDb
+          .prepare(
+            `SELECT disabled FROM workshop_credentials
+             WHERE installation_id = ? AND credential_id = ?`,
+          )
+          .bind(installationId, 'credential:worker')
+          .first(),
+      ).resolves.toEqual({ disabled: 1 });
+      await expect(
+        port.recheckPrincipal(
+          {
+            ...context.principal,
+            principalId: 'principal:worker',
+            credentialId: 'credential:worker',
+          },
+          context.signal,
+        ),
+      ).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(
+        port.call(
+          'authorization_admin',
+          { version: 1, action: 'status' },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        action: 'status',
+        value: { principals: 1, credentials: 1, audits: 3 },
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it('commits complete statement, qualifier, reference, and rank mutations through the sealed Taproot port', async () => {
+    const path = join(tmpdir(), `workshop-mutation-${randomUUID()}.sqlite`);
+    paths.push(path);
+    const db = new NodeSqliteDatabase(path);
+    const workshopDb = db as unknown as D1DatabaseLike;
+    const taproot = { baseIri: 'https://workshop-mutation.test/' };
+    const installationId = 'installation:mutation-test';
+    try {
+      await initializeTaproot(db, taproot);
+      await applyWorkshopMigrations(workshopDb);
+      const hostKey = await crypto.subtle.generateKey(
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+      const hostAuthority = createTaprootHostWriteCapability(
+        db,
+        taproot,
+        hostKey,
+      );
+      await bootstrapTaprootAuthorization(
+        db,
+        taproot,
+        hostAuthority,
+        installationId,
+      );
+      const cursorKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt'],
+      );
+      const port = await createWorkshopTaprootOperationPortV1({
+        kind: 'workshop-taproot-assembly-v1',
+        db: workshopDb,
+        installationId,
+        taprootOptions: taproot,
+        hostAuthority,
+        cursorCodec: createAuthorizationCursorCodec(cursorKey),
+        async status() {
+          throw new Error('unused');
+        },
+      });
+      const context = {
+        principal: {
+          installationId,
+          principalId: 'agent:mutation-author',
+          credentialId: 'credential:mutation-author',
+          activeWorkspaceId: 'workspace:mutation-test',
+          workspaceIds: ['workspace:mutation-test'],
+          capabilities: [
+            'read',
+            'knowledge:write',
+            'knowledge:policy',
+            'admin',
+          ],
+          authorizationRevision: 1,
+        },
+        requestId: 'request:mutation-test',
+        signal: new AbortController().signal,
+      };
+      const property = (await port.call(
+        'create_property',
+        {
+          idempotencyKey: 'property-name-v1',
+          authoredText: 'Create a string property.',
+          data: {
+            id: 'P1',
+            datatype: 'string',
+            labels: { en: { language: 'en', value: 'Name' } },
+          },
+        },
+        context,
+      )) as { authorizationRevision: number };
+      context.principal.authorizationRevision = property.authorizationRevision;
+      const item = (await port.call(
+        'create_item',
+        {
+          idempotencyKey: 'item-subject-v1',
+          authoredText: 'Create a mutation subject.',
+          data: {
+            id: 'Q1',
+            labels: { en: { language: 'en', value: 'Subject' } },
+          },
+        },
+        context,
+      )) as { authorizationRevision: number };
+      context.principal.authorizationRevision = item.authorizationRevision;
+      const statementId = 'Q1$statement-1';
+      const valueSnak = {
+        snaktype: 'value',
+        property: 'P1',
+        datatype: 'string',
+        datavalue: { value: 'Ada', type: 'string' },
+      };
+      const added = (await port.call(
+        'mutate_entity',
+        {
+          entityId: 'Q1',
+          expectedRevision: 1,
+          idempotencyKey: 'item-statement-v1',
+          mutations: [
+            {
+              kind: 'statement',
+              authoredText: 'State the subject name.',
+              value: {
+                type: 'add-statement',
+                statement: {
+                  id: statementId,
+                  type: 'statement',
+                  text: 'State the subject name.',
+                  rank: 'normal',
+                  mainsnak: valueSnak,
+                  qualifiers: {},
+                  'qualifiers-order': [],
+                  references: [],
+                },
+              },
+            },
+          ],
+        },
+        context,
+      )) as {
+        newRevision: number;
+        quadPatch: { inserted: number };
+      };
+      expect(added.newRevision).toBe(2);
+      expect(added.quadPatch.inserted).toBeGreaterThan(0);
+      context.principal.authorizationRevision = (
+        added as typeof added & { authorizationRevision: number }
+      ).authorizationRevision;
+
+      const reference = {
+        hash: 'reference-1',
+        snaks: {
+          P1: [
+            { ...valueSnak, datavalue: { value: 'Source', type: 'string' } },
+          ],
+        },
+        'snaks-order': ['P1'],
+      };
+      const revised = (await port.call(
+        'mutate_entity',
+        {
+          entityId: 'Q1',
+          expectedRevision: 2,
+          idempotencyKey: 'item-statement-detail-v1',
+          mutations: [
+            {
+              kind: 'qualifier',
+              authoredText: 'Qualify the subject name.',
+              value: {
+                type: 'add-qualifier',
+                statementId,
+                snak: {
+                  ...valueSnak,
+                  datavalue: { value: 'Primary', type: 'string' },
+                },
+                text: 'Qualify the subject name.',
+              },
+            },
+            {
+              kind: 'reference',
+              authoredText: 'Reference the subject name.',
+              value: {
+                type: 'add-reference',
+                statementId,
+                reference,
+                text: 'Reference the subject name.',
+              },
+            },
+            {
+              kind: 'rank',
+              authoredText: 'Prefer the sourced subject name.',
+              value: {
+                type: 'set-statement-rank',
+                statementId,
+                rank: 'preferred',
+                text: 'Prefer the sourced subject name.',
+              },
+            },
+          ],
+        },
+        context,
+      )) as {
+        newRevision: number;
+        entity: {
+          claims: Record<
+            string,
+            Array<{
+              rank: string;
+              qualifiers: Record<string, unknown[]>;
+              references: Array<{ hash: string }>;
+            }>
+          >;
+        };
+        quadPatch: { deleted: number; inserted: number };
+      };
+      expect(revised.newRevision).toBe(3);
+      expect(revised.entity.claims.P1?.[0]).toMatchObject({
+        rank: 'preferred',
+        qualifiers: { P1: [expect.any(Object)] },
+        references: [{ hash: 'reference-1' }],
+      });
+      expect(
+        revised.quadPatch.deleted + revised.quadPatch.inserted,
+      ).toBeGreaterThan(0);
+      context.principal.authorizationRevision = (
+        revised as typeof revised & { authorizationRevision: number }
+      ).authorizationRevision;
+      await expect(
+        port.call('entity_history', { entityId: 'Q1' }, context),
+      ).resolves.toMatchObject({
+        items: expect.arrayContaining([
+          expect.objectContaining({ revision: 1 }),
+          expect.objectContaining({ revision: 2 }),
+          expect.objectContaining({ revision: 3 }),
+        ]),
+      });
+      await expect(
+        port.call('statement_history', { statementId }, context),
+      ).resolves.toMatchObject({
+        items: expect.arrayContaining([
+          expect.objectContaining({ entityRevision: 2 }),
+          expect.objectContaining({ entityRevision: 3 }),
+        ]),
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it('adopts more than 1,000 legacy rows in bounded pages and restores producers after restart', async () => {
     const path = join(
       tmpdir(),
@@ -372,6 +820,72 @@ describe('Workshop external search producers', () => {
         sourceId: prompt.id,
         sourceRevision: '1',
       });
+      const cursorKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt'],
+      );
+      const operationPort = await createWorkshopTaprootOperationPortV1({
+        kind: 'workshop-taproot-assembly-v1',
+        db: workshopDb,
+        installationId,
+        taprootOptions: taproot,
+        hostAuthority: hostCapability,
+        cursorCodec: createAuthorizationCursorCodec(cursorKey),
+        search: search.service,
+        semantic: search.semantic,
+        async status() {
+          throw new Error('unused');
+        },
+      });
+      const operationContext = {
+        principal: {
+          ...context,
+          credentialId: 'credential:search-test',
+        },
+        requestId: 'request:search-test',
+        signal: new AbortController().signal,
+      };
+      await expect(
+        operationPort.call(
+          'search',
+          { text: 'overlapping work', kinds: ['prompt'], limit: 10 },
+          operationContext,
+        ),
+      ).resolves.toMatchObject({
+        items: [
+          {
+            kind: 'prompt',
+            id: prompt.id,
+            revision: 1,
+          },
+        ],
+      });
+      await expect(
+        operationPort.call(
+          'search',
+          { text: 'overlapping work', cursor: 'forged-cursor', limit: 2 },
+          operationContext,
+        ),
+      ).rejects.toMatchObject({
+        code: 'invalid_cursor',
+        status: 400,
+        message: 'Search cursor is invalid',
+      });
+      await expect(
+        operationPort.call(
+          'search_admin',
+          { action: 'health' },
+          operationContext,
+        ),
+      ).resolves.toHaveProperty('materialization');
+      await expect(
+        operationPort.call(
+          'search_admin',
+          { action: 'materialize', limit: 100 },
+          operationContext,
+        ),
+      ).resolves.toHaveProperty('completed');
       await expect(
         search.search(
           { text: 'overlapping work', kinds: ['prompt'], limit: 10 },

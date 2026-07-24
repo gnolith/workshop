@@ -77,11 +77,40 @@ export function createWorkshopBootstrapOwnerAdapterV1(
           workspaceId: payload.workspaceId,
           idempotencyKey: payload.idempotencyKey,
           grantManifestDigest: payload.grantManifestDigest,
-          workshopSchemaVersion: 9,
+          workshopSchemaVersion: 11,
         } as const;
         const receiptJson = canonicalize(ownerReceipt);
         return Promise.resolve({
           statements: [
+            db
+              .prepare(
+                `INSERT INTO workshop_authorization_principals (
+                   installation_id, principal_id, lifecycle,
+                   created_at, updated_at
+                 ) VALUES (?, ?, 'active', ?, ?)
+                 ON CONFLICT(installation_id, principal_id) DO NOTHING`,
+              )
+              .bind(
+                payload.installationId,
+                payload.principalId,
+                payload.createdAt,
+                payload.createdAt,
+              ),
+            db
+              .prepare(
+                `INSERT INTO workshop_workspace_memberships (
+                   installation_id, principal_id, workspace_id,
+                   active, updated_at
+                 ) VALUES (?, ?, ?, 1, ?)
+                 ON CONFLICT(installation_id, principal_id, workspace_id)
+                 DO NOTHING`,
+              )
+              .bind(
+                payload.installationId,
+                payload.principalId,
+                payload.workspaceId,
+                payload.createdAt,
+              ),
             db
               .prepare(
                 `INSERT INTO workshop_credentials (
@@ -171,7 +200,7 @@ export async function bootstrapWorkshopV1(
   dependencies: BootstrapWorkshopV1Dependencies,
 ): Promise<BootstrapWorkshopV1Receipt> {
   validateInput(input);
-  if (dependencies.workshopSchemaVersion !== 9)
+  if (dependencies.workshopSchemaVersion !== 11)
     throw new WorkshopError(
       'dependency_unavailable',
       'Workshop schema migration 0009 is required before bootstrap',

@@ -45,7 +45,18 @@ describe('migration artifact integrity', () => {
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')
         .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
-    ).toEqual([true, true, false, false, false, false, false, false]);
+    ).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
     expect(workshopMigrations[3]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[4]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[5]!.sql).toContain("package_version = '0.4.0'");

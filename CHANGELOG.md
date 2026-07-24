@@ -5,7 +5,7 @@
 - Replaced the UI/Site/Worker package with the `gnolith-workshop` self-hosted
   executable, one listener, authenticated MCP and BFF, and explicit offline
   bootstrap.
-- Generated one 51-operation `gnolith` catalog shared by schemas, MCP, BFF,
+- Generated one 52-operation `gnolith` catalog shared by schemas, MCP, BFF,
   validation, and the generic client.
 - Added separate local-bearer and remote-OAuth profiles, fail-closed readiness,
   verified immutable Waystone assets, bounded lifecycle controls, task leases,
@@ -17,6 +17,10 @@
   source/history updates, durable idempotency receipts, and lease audit events.
 - Added schema 8 durable credential/bootstrap receipts and an exact Taproot
   authorization-bootstrap owner adapter.
+- Added schema 11 sealed authorization administration, durable principal,
+  membership, credential/OAuth, audit, and semantic configuration state.
+- Added offline semantic configuration with exact revision/fingerprint
+  receipts, fail-closed endpoint policy, and truthful degraded/ready status.
 - Added public bounded local-filesystem ResourceBlob backup/restore ports with
   private content-addressed paths, verified staging, collision checks, rebinds,
   rollback, and symlink/traversal defenses.

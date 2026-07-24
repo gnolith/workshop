@@ -24,6 +24,7 @@ import {
   type SearchKind,
   type SearchResultV1,
   type SemanticSearchAdminV1,
+  type SearchMaterializationHealthV1,
 } from '@gnolith/taproot/search';
 import { prepareScopedSparqlPolicyV1 } from '@gnolith/taproot/sparql-policy';
 import type { OperationName } from './generated/operations.js';
@@ -34,6 +35,13 @@ import type {
 } from './operations.js';
 import type { AuthenticatedPrincipal } from './protocol.js';
 import { WorkshopError } from './protocol/errors.js';
+import type { WorkshopAuthorizedSearchServiceV1 } from './server/search.js';
+import type { D1DatabaseLike as WorkshopD1DatabaseLike } from './server/database.js';
+import {
+  createWorkshopAuthorizationAdministrationV1,
+  type WorkshopAuthorizationAdministrationV1,
+} from './authorization-administration.js';
+import { configureWorkshopSemanticsV1 } from './semantic-configuration.js';
 
 export interface WorkshopTaprootAssemblyOptionsV1 {
   kind: 'workshop-taproot-assembly-v1';
@@ -45,6 +53,8 @@ export interface WorkshopTaprootAssemblyOptionsV1 {
   payloadStore?: PortableResourcePayloadStoreV1;
   maxHydratedResourceBytes?: number;
   semantic?: SemanticSearchAdminV1;
+  search?: WorkshopAuthorizedSearchServiceV1;
+  authorizationAdministration?: WorkshopAuthorizationAdministrationV1;
   status(
     context: AuthorizationContext,
     signal: AbortSignal,
@@ -56,6 +66,7 @@ interface TaprootRuntimeV1 {
   content: TaprootContentRepositoryV1;
   search: AuthorizedSearchServiceV1;
   materialization: SearchMaterializationAdminGuardV1;
+  authorizationAdministration: WorkshopAuthorizationAdministrationV1;
 }
 
 /** Composes only packed Taproot public capabilities into Workshop's catalog. */
@@ -83,17 +94,27 @@ export async function createWorkshopTaprootOperationPortV1(
       },
     ),
     content,
-    search: createAuthorizedSearchServiceV1(options.db, {
-      installationId: options.installationId,
-      content,
-      ...(options.semantic ? { semantic: options.semantic } : {}),
-    }),
+    search: options.search
+      ? (options.search as unknown as AuthorizedSearchServiceV1)
+      : createAuthorizedSearchServiceV1(options.db, {
+          installationId: options.installationId,
+          content,
+          ...(options.semantic ? { semantic: options.semantic } : {}),
+        }),
     materialization: await createSearchMaterializationAdminGuardV1(
       options.db,
       options.taprootOptions,
       options.hostAuthority,
       options.payloadStore ? { payloadStore: options.payloadStore } : undefined,
     ),
+    authorizationAdministration:
+      options.authorizationAdministration ??
+      (await createWorkshopAuthorizationAdministrationV1({
+        db: options.db as unknown as WorkshopD1DatabaseLike,
+        taprootOptions: options.taprootOptions,
+        hostAuthority: options.hostAuthority,
+        installationId: options.installationId,
+      })),
   };
   if (runtime.operator.kind !== 'taproot-workshop-port-v1')
     throw unavailable('Taproot Workshop operator port is incompatible');
@@ -101,15 +122,29 @@ export async function createWorkshopTaprootOperationPortV1(
   const port: TaprootOperationPort = {
     async recheckPrincipal(principal, signal) {
       signal.throwIfAborted();
-      const live = await runtime.operator.resolveAuthorization({
-        principalId: principal.principalId,
-        activeWorkspaceId: principal.activeWorkspaceId,
-      });
+      let live: Awaited<
+        ReturnType<TaprootWorkshopPortV1['resolveAuthorization']>
+      >;
+      try {
+        live = await runtime.operator.resolveAuthorization({
+          principalId: principal.principalId,
+          activeWorkspaceId: principal.activeWorkspaceId,
+        });
+      } catch (error) {
+        if (
+          (error as { name?: unknown }).name === 'AuthorizationDeniedError' ||
+          (error as { code?: unknown }).code === 'AUTHORIZATION_DENIED'
+        )
+          throw new WorkshopError('forbidden', 'Authorization denied', 403);
+        throw error;
+      }
       assertInstallation(options.installationId, live.installationId);
-      return {
+      const resolved = {
         ...live,
         credentialId: principal.credentialId,
       };
+      await runtime.authorizationAdministration.assertPrincipalActive(resolved);
+      return resolved;
     },
     status(principal, signal) {
       return options.status(authorization(principal), signal);
@@ -146,18 +181,33 @@ async function callTaproot(
     { cursorCodec: options.cursorCodec },
   );
   switch (name) {
+    case 'authorization_admin':
+      return runtime.authorizationAdministration.call(input, callContext);
     case 'search': {
-      const page = await runtime.search.search(
-        {
-          text: requiredString(input.text),
-          ...(Array.isArray(input.kinds)
-            ? { kinds: input.kinds as SearchKind[] }
-            : {}),
-          ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
-          ...(typeof input.cursor === 'string' ? { cursor: input.cursor } : {}),
-        },
-        context,
-      );
+      let page: Awaited<ReturnType<AuthorizedSearchServiceV1['search']>>;
+      try {
+        page = await runtime.search.search(
+          {
+            text: requiredString(input.text),
+            ...(Array.isArray(input.kinds)
+              ? { kinds: input.kinds as SearchKind[] }
+              : {}),
+            ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
+            ...(typeof input.cursor === 'string'
+              ? { cursor: input.cursor }
+              : {}),
+          },
+          context,
+        );
+      } catch (error) {
+        if (typeof input.cursor === 'string')
+          throw new WorkshopError(
+            'invalid_cursor',
+            'Search cursor is invalid',
+            400,
+          );
+        throw error;
+      }
       return {
         items: page.results.map((result) => ({
           ...result,
@@ -347,12 +397,14 @@ async function searchAdministration(
   callContext: OperationCallContext,
 ): Promise<unknown> {
   const action = requiredString(input.action);
-  const values = record(input.options);
+  const values = record(input.options ?? {});
   const limit = typeof input.limit === 'number' ? input.limit : 100;
   switch (action) {
     case 'health':
       return {
-        materialization: await runtime.materialization.health(context),
+        materialization: truthfulMaterializationHealth(
+          await runtime.materialization.health(context),
+        ),
         semantic: options.semantic
           ? await options.semantic.status(context)
           : { state: 'unconfigured' },
@@ -381,6 +433,21 @@ async function searchAdministration(
   const semantic = options.semantic;
   if (!semantic) throw unavailable('Semantic search is not configured');
   switch (action) {
+    case 'configure':
+      return configureWorkshopSemanticsV1(
+        {
+          version: 1,
+          expectedRevision: Number(values.expectedRevision),
+          idempotencyKey: requiredString(values.idempotencyKey),
+          configuration: values.configuration as never,
+        },
+        {
+          db: options.db as unknown as WorkshopD1DatabaseLike,
+          installationId: options.installationId,
+          semantic,
+          authorization: context,
+        },
+      );
     case 'semantic-select':
       await semantic.select(requiredString(values.configurationId), context);
       return semantic.status(context);
@@ -446,6 +513,17 @@ async function searchAdministration(
         400,
       );
   }
+}
+
+export function truthfulMaterializationHealth(
+  health: SearchMaterializationHealthV1,
+): SearchMaterializationHealthV1 {
+  if (
+    health.status === 'healthy' &&
+    health.activeAppliedWatermark < health.sourceHighWatermark
+  )
+    return { ...health, status: 'building' };
+  return health;
 }
 
 function authorization(

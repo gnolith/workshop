@@ -28,6 +28,7 @@ import type {
   DiamondSparqlPort,
   WorkshopStatusSnapshot,
 } from './operations.js';
+import type { ConfigureWorkshopSemanticsV1Dependencies } from './semantic-configuration.js';
 
 export interface WorkshopLocalExecutableDependenciesV1 {
   kind: 'workshop-local-executable-dependencies-v1';
@@ -44,6 +45,7 @@ export interface WorkshopLocalExecutableDependenciesV1 {
     expectation: WorkshopProducerBindingExpectation;
   };
   preflight: (signal: AbortSignal) => Promise<WorkshopStatusSnapshot>;
+  semanticConfiguration: ConfigureWorkshopSemanticsV1Dependencies;
   assets?: (
     config: WorkshopServiceConfig,
     protectedReader: ProtectedReader,
@@ -109,6 +111,8 @@ export async function createWorkshopLocalExecutableAdapterV1(
             Promise.resolve(dependencies.bootstrap!),
         }
       : {}),
+    createWorkshopSemanticConfigurationDependencies: () =>
+      Promise.resolve(dependencies.semanticConfiguration),
   };
   return Object.freeze(adapter);
 }

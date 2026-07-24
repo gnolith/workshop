@@ -45,6 +45,9 @@ export interface WorkshopStatusSnapshot {
   semantic: {
     state: 'ready' | 'degraded' | 'unconfigured';
     configured: boolean;
+    revision: number | null;
+    fingerprint: string | null;
+    ready: boolean;
   };
   producers: {
     ready: boolean;
@@ -122,6 +125,7 @@ export interface OperationRuntime {
 }
 
 const TAPROOT_NAMES = new Set<OperationName>([
+  'authorization_admin',
   'search',
   'search_hydrate',
   'search_admin',
@@ -267,6 +271,10 @@ export function createOperationRuntime(
             'internal_error',
             'Operation output does not match its schema',
             500,
+            {
+              operation: name,
+              errors: boundedAjvErrors(outputValidator?.errors),
+            },
           );
         await observe(options, {
           operation: name,

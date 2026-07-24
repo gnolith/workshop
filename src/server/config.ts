@@ -1,5 +1,6 @@
 import { WorkshopError } from '../protocol/errors.js';
 import type { RemoteOAuthConfig } from './auth.js';
+import { validateWorkshopAssetPrefix } from './assets.js';
 
 export interface ListenerConfig {
   host: string;
@@ -207,7 +208,7 @@ function validateAssetMount(
     throw invalid('Asset mount configuration is invalid');
   exactKeys(value, ['prefix', 'manifest', 'root']);
   return {
-    prefix: value.prefix,
+    prefix: validateWorkshopAssetPrefix(value.prefix),
     manifest: selector(value.manifest),
     root: selector(value.root),
   };

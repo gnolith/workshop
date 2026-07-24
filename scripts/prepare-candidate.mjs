@@ -41,6 +41,8 @@ const migrationIds = [
   '0007_task_leases',
   '0008_bootstrap_credentials',
   '0009_operation_receipts',
+  '0010_durable_mutation_receipts',
+  '0011_administration_control_plane',
 ];
 const inventory = {
   format: 'gnolith-workshop-candidate-v1',
@@ -52,8 +54,8 @@ const inventory = {
   sbom,
   sbomSha256,
   catalogDigest:
-    '577cc1de501b0ae3556eb1d32e7dd516c70a09c5b6226d671cec312068fba3dd',
-  schemaVersion: 9,
+    'a57799a792a075a5e359567240a7241a48df4155fae3a9e73b092ccf9035955b',
+  schemaVersion: 11,
   migrationNamespace: '@gnolith/workshop',
   migrations: await Promise.all(
     migrationIds.map(async (id) => ({

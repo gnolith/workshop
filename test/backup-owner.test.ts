@@ -63,7 +63,7 @@ describe('Workshop owner backup handle factory', () => {
         ...createWorkshopOwnerHandlesV1(
           ownerOptions(source.db, installationId, 'connection:source'),
         ),
-        schemaVersion: 9,
+        schemaVersion: 11,
         clock: () => new Date('2026-07-23T13:00:00.000Z'),
       });
       const backup = await sourceApi.exportBackup(installationId);
@@ -92,7 +92,7 @@ describe('Workshop owner backup handle factory', () => {
         ...createWorkshopOwnerHandlesV1(
           ownerOptions(destination.db, installationId, 'connection:target'),
         ),
-        schemaVersion: 9,
+        schemaVersion: 11,
         clock: () => new Date('2026-07-23T14:00:00.000Z'),
       });
       await expect(destinationApi.importBackup(backup)).resolves.toMatchObject({

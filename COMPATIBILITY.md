@@ -11,4 +11,10 @@ operation aliases are documented only in
 
 Waystone is optional static content. Workshop serves only a verified immutable
 `waystone-assets-v1` manifest and does not import or initialize a Waystone
-runtime.
+runtime. The canonical safe mount is `/app`; service and protocol routes remain
+reserved.
+
+Semantic configuration accepts OpenAI-compatible and Ollama-compatible
+providers with SQLite or Qdrant vectors. Ollama remains degraded/unavailable
+until a separately supplied immutable model is actually ready; Workshop never
+pulls a floating model or invents a model digest.

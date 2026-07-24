@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createWorkshopCore } from '../src/server/context.js';
 import { createTestContext, TEST_AUTHORIZATION } from './helpers.js';
 
 const disposals: Array<() => Promise<void>> = [];
@@ -107,6 +108,80 @@ describe('task leases', () => {
     await expect(
       context.runtime.tasks.completeLease(completionInput, TEST_AUTHORIZATION),
     ).resolves.toEqual(completed);
+    await expect(
+      context.runtime.tasks.completeLease(
+        { ...completionInput, result: 'different' },
+        TEST_AUTHORIZATION,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+    await expect(
+      context.runtime.tasks.completeLease(
+        { ...completionInput, outcomeKind: 'negative' },
+        TEST_AUTHORIZATION,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+    await expect(
+      context.runtime.tasks.completeLease(
+        { ...completionInput, leaseToken: 'A'.repeat(43) },
+        TEST_AUTHORIZATION,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+
+    const reconstructed = createWorkshopCore({
+      persistence: context.db,
+      authorization: context.authorization,
+      knowledge: {
+        authorizedReader: () => ({
+          getEntity: async () => ({}),
+          searchEntities: async () => ({ items: [], cursor: null }),
+        }),
+        health: async () => true,
+      },
+      diamondHealth: async () => true,
+      cursorCodec: context.cursorCodec,
+      search: context.search,
+    });
+    await expect(
+      reconstructed.tasks.completeLease(completionInput, TEST_AUTHORIZATION),
+    ).resolves.toEqual(completed);
+    await expect(
+      reconstructed.tasks.completeLease(
+        { ...completionInput, result: 'restart-conflict' },
+        TEST_AUTHORIZATION,
+      ),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+    await expect(
+      reconstructed.tasks.completeLease(completionInput, {
+        ...TEST_AUTHORIZATION,
+        principalId: 'agent:other',
+      }),
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(/forbidden|conflict/u),
+    });
+  });
+
+  it('returns one claim and one stable conflict for simultaneous claims', async () => {
+    const context = await createTestContext();
+    disposals.push(context.dispose);
+    const task = await context.runtime.tasks.create(
+      {
+        description: 'Claim once',
+        prompt: 'Race two claimers.',
+      },
+      TEST_AUTHORIZATION,
+    );
+    const results = await Promise.allSettled([
+      context.runtime.tasks.claimLease(task.id, 60, TEST_AUTHORIZATION),
+      context.runtime.tasks.claimLease(task.id, 60, TEST_AUTHORIZATION),
+    ]);
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(
+      1,
+    );
+    const rejected = results.find(({ status }) => status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'conflict', status: 409 },
+    });
   });
 
   it('requires the live owner token to archive a leased task', async () => {

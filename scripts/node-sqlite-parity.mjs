@@ -12,13 +12,13 @@ try {
     'DIAMOND_TARBALL',
     resolve('..', 'diamond', 'gnolith-diamond-0.5.0.tgz'),
     process.env.DIAMOND_TARBALL_SHA256 ??
-      '6a8075a70162fe2567579f7fe110e674509b648923b18fdb310833b44739c300',
+      'df6c1aa3703b35016156fb40926dd1aac4fb8d946128826a94b775dec67eb303',
   );
   const taprootTarball = artifact(
     'TAPROOT_TARBALL',
-    resolve('..', 'taproot-artifacts', 'gnolith-taproot-0.5.0.tgz'),
+    resolve('..', 'taproot', 'gnolith-taproot-0.5.0.tgz'),
     process.env.TAPROOT_TARBALL_SHA256 ??
-      'de43e8a8bc99a6045efe4bb924ee5de528b28b338c7974cb74fea98911427f30',
+      '74c4a49eb224003f574c7bcd7eb3e5c47ff253bc9608d0ce748db6a83efbe0a2',
   );
   const [packed] = JSON.parse(
     execFileSync(
@@ -150,8 +150,8 @@ import {
 } from '@gnolith/workshop/migrations';
 
 assert.equal(workshopPackage.version, '0.5.0');
-assert.equal(workshopPackage.schemaVersion, 9);
-assert.equal(WORKSHOP_SCHEMA_VERSION, 9);
+assert.equal(workshopPackage.schemaVersion, 11);
+assert.equal(WORKSHOP_SCHEMA_VERSION, 11);
 const temporary = await mkdtemp(join(tmpdir(), 'workshop-consumer-'));
 const path = join(temporary, 'shared.sqlite');
 const baseIri = 'https://packed-parity.example';
@@ -161,13 +161,15 @@ try {
   await initializeTaproot(db, { baseIri });
   assert.deepEqual(await applyWorkshopMigrations(db), {
     previousVersion: 0,
-    version: 9,
+    version: 11,
     applied: [
       '0001_workshop', '0002_revisions', '0003_resumable_onboarding',
       '0004_authorization', '0005_cursor_snapshots',
       '0006_canonical_search_domains', '0007_task_leases',
       '0008_bootstrap_credentials',
       '0009_operation_receipts',
+      '0010_durable_mutation_receipts',
+      '0011_administration_control_plane',
     ],
   });
   const key = await crypto.subtle.generateKey(
@@ -195,7 +197,7 @@ try {
       ownerAdapter,
       commitAuthorizationBootstrapV1,
       readProtectedCredential: async () => credentialFile.slice(),
-      workshopSchemaVersion: 9,
+      workshopSchemaVersion: 11,
     },
   );
   assert.equal(receipt.installationId, installationId);
@@ -218,7 +220,7 @@ try {
   await db.close();
   db = new NodeSqliteDatabase(path);
   assert.deepEqual(await applyWorkshopMigrations(db), {
-    previousVersion: 9, version: 9, applied: [],
+    previousVersion: 11, version: 11, applied: [],
   });
 } finally {
   await db.close().catch(() => {});

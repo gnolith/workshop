@@ -59,7 +59,9 @@ import type {
   D1PreparedStatementLike,
   D1ResultLike,
 } from './server/database.js';
+import { readWorkshopSemanticStatusV1 } from './semantic-configuration.js';
 import type { CloseableDependency } from './server/service.js';
+import { createBoundedTrigger } from './server/lifecycle.js';
 import { createWorkshopSearchIntegrationV1 } from './server/search.js';
 import {
   createWorkshopLocalExecutableAdapterV1,
@@ -98,6 +100,12 @@ export interface WorkshopLocalAssemblyPrimitivesV1 {
     protectedReader: ProtectedReader,
   ) => Promise<VerifiedWaystoneAssets | undefined>;
   dependencies?: readonly CloseableDependency[];
+  semantic?: {
+    fetch?: typeof fetch;
+    resolveCredential?: (
+      selector: string,
+    ) => string | Promise<string | undefined> | undefined;
+  };
   workshop?: Omit<
     WorkshopCoreOptions,
     | 'persistence'
@@ -171,8 +179,15 @@ export async function createWorkshopLocalExecutableAdapterFromPrimitivesV1(
         ownerParticipantIssuer,
         ownerAdapter,
         commitAuthorizationBootstrapV1,
-        workshopSchemaVersion: 9,
+        workshopSchemaVersion: 11,
       };
+    },
+    async createWorkshopSemanticConfigurationDependencies() {
+      const dependencies = await assembleExecutableDependencies(
+        input,
+        ownerHandles,
+      );
+      return dependencies.semanticConfiguration;
     },
   });
 }
@@ -211,6 +226,7 @@ async function assembleExecutableDependencies(
     hostCapability: input.taproot.hostAuthority,
     installationId: input.installationId,
     registrationContext,
+    ...(input.semantic ? { semantic: input.semantic } : {}),
   });
   const expectation: WorkshopProducerBindingExpectation = {
     installationId: input.installationId,
@@ -223,14 +239,20 @@ async function assembleExecutableDependencies(
     prompt: producerHandle(input, expectation, search.prompt),
   });
   const diamond = createWorkshopDiamondSparqlPortV1(input.db, input.diamond);
-  const status = () =>
-    workshopLocalStatus(
+  const status = async () => {
+    const liveRegistrationContext = await operator.resolveAuthorization(
+      input.taproot.registrationPrincipal,
+    );
+    return workshopLocalStatus(
       input.db,
       guard,
       input,
       expectation,
       input.taproot.payloadStore !== undefined,
+      () => search.materialization.health(liveRegistrationContext),
+      () => search.semantic.status(liveRegistrationContext),
     );
+  };
   const workshop: WorkshopCoreOptions = {
     ...(input.workshop ?? {}),
     persistence: input.db,
@@ -263,6 +285,7 @@ async function assembleExecutableDependencies(
       taprootOptions: input.taproot.options,
       hostAuthority: input.taproot.hostAuthority,
       cursorCodec: input.taproot.authorizationCursorCodec,
+      search: search.service,
       ...(input.taproot.payloadStore
         ? { payloadStore: input.taproot.payloadStore }
         : {}),
@@ -311,9 +334,35 @@ async function assembleExecutableDependencies(
       );
     },
     producerBinding: { binding: producerBinding, expectation },
+    trigger: createBoundedTrigger({
+      intervalMs: 5_000,
+      timeoutMs: 4_000,
+      trigger: {
+        async run(signal) {
+          signal.throwIfAborted();
+          const liveRegistrationContext = await operator.resolveAuthorization(
+            input.taproot.registrationPrincipal,
+          );
+          await search.materialization.run(liveRegistrationContext, {
+            maxJobs: 10,
+            maxRebuildRoots: 10,
+          });
+        },
+        checkpoint(signal) {
+          signal.throwIfAborted();
+          return Promise.resolve();
+        },
+      },
+    }),
     preflight: async (signal: AbortSignal) => {
       signal.throwIfAborted();
       return status();
+    },
+    semanticConfiguration: {
+      db: input.db,
+      installationId: input.installationId,
+      semantic: search.semantic,
+      authorization: registrationContext,
     },
     ...(input.assets ? { assets: input.assets } : {}),
     ...(input.dependencies ? { dependencies: input.dependencies } : {}),
@@ -579,13 +628,29 @@ async function workshopLocalStatus(
   input: WorkshopLocalAssemblyPrimitivesV1,
   expectation: WorkshopProducerBindingExpectation,
   blobReady: boolean,
+  materializationHealth: () => Promise<{
+    status: string;
+    sourceHighWatermark: number;
+    activeAppliedWatermark: number;
+  }>,
+  semanticHealth: () => Promise<{
+    configured: boolean;
+    state: string;
+    revision: number | null;
+    fingerprint: string | null;
+    ready: boolean;
+  }>,
 ): Promise<WorkshopStatusSnapshot> {
-  const [schema, state] = await Promise.all([
-    db
-      .prepare('SELECT version FROM workshop_schema WHERE singleton = 1')
-      .first<{ version: number }>(),
-    guard.readCurrentState(),
-  ]);
+  const [schema, state, searchHealth, persistedSemantic, semanticHealthValue] =
+    await Promise.all([
+      db
+        .prepare('SELECT version FROM workshop_schema WHERE singleton = 1')
+        .first<{ version: number }>(),
+      guard.readCurrentState(),
+      materializationHealth(),
+      readWorkshopSemanticStatusV1(db, input.installationId),
+      semanticHealth(),
+    ]);
   const authorizationReady =
     state.installationId === input.installationId &&
     state.authorizationRevision >= 1;
@@ -594,15 +659,26 @@ async function workshopLocalStatus(
     migrations: {
       namespace: '@gnolith/workshop',
       version: schema?.version ?? 0,
-      ready: schema?.version === 9,
+      ready: schema?.version === 11,
     },
     compatibility: { diamond: true, taproot: true },
     canonicalReady: true,
     authorizationReady,
-    lexicalReady: true,
+    lexicalReady:
+      searchHealth.status === 'healthy' &&
+      searchHealth.activeAppliedWatermark >= searchHealth.sourceHighWatermark,
     semantic: {
-      state: 'unconfigured',
-      configured: false,
+      state: semanticHealthValue.ready
+        ? 'ready'
+        : semanticHealthValue.configured || persistedSemantic.configured
+          ? 'degraded'
+          : 'unconfigured',
+      configured:
+        semanticHealthValue.configured || persistedSemantic.configured,
+      revision: semanticHealthValue.revision ?? persistedSemantic.revision,
+      fingerprint:
+        semanticHealthValue.fingerprint ?? persistedSemantic.fingerprint,
+      ready: semanticHealthValue.ready,
     },
     producers: {
       ready: true,

@@ -100,7 +100,15 @@
       "additionalProperties": false,
       "required": ["prefix", "manifest", "root"],
       "properties": {
-        "prefix": { "type": "string", "pattern": "^/" },
+        "prefix": {
+          "type": "string",
+          "pattern": "^/[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)*$",
+          "not": {
+            "pattern": "^/(?:mcp|health|api|\\.well-known)(?:/|$)"
+          },
+          "description": "Static UI mount. Use /app. Reserved service prefixes and / are rejected.",
+          "examples": ["/app"]
+        },
         "manifest": { "$ref": "#/$defs/protectedSelector" },
         "root": { "$ref": "#/$defs/protectedSelector" }
       }

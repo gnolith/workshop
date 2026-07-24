@@ -4,7 +4,7 @@ export interface WorkshopMigration {
   sql: string;
 }
 
-export const WORKSHOP_SCHEMA_VERSION = 9;
+export const WORKSHOP_SCHEMA_VERSION = 11;
 
 export const workshopMigrations: readonly WorkshopMigration[] = [
   {
@@ -567,9 +567,203 @@ SET version = 9,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE singleton = 1;`,
   },
+  {
+    id: '0010_durable_mutation_receipts',
+    checksum:
+      'sha256:d858a4401f715cc954f16a23d2a8e332c55da5f0eb06c4b3a9bf3acdfad56421',
+    sql: `ALTER TABLE workshop_task_lease_receipts
+ADD COLUMN request_digest TEXT CHECK (
+  request_digest IS NULL OR (
+    length(request_digest) = 64
+    AND request_digest NOT GLOB '*[^0-9a-f]*'
+  )
+);
+
+ALTER TABLE workshop_operation_receipts
+RENAME TO workshop_operation_receipts_v9;
+
+CREATE TABLE workshop_operation_receipts (
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK (
+    operation IN (
+      'memory.upsert',
+      'memory.delete',
+      'prompt.create',
+      'prompt.update',
+      'prompt.delete'
+    )
+  ),
+  idempotency_key TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  request_digest TEXT NOT NULL CHECK (
+    length(request_digest) = 64
+    AND request_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (
+    installation_id,
+    principal_id,
+    operation,
+    idempotency_key
+  )
+);
+
+INSERT INTO workshop_operation_receipts (
+  installation_id,
+  principal_id,
+  operation,
+  idempotency_key,
+  subject_id,
+  request_digest,
+  response_json,
+  created_at
+)
+SELECT
+  installation_id,
+  principal_id,
+  operation,
+  idempotency_key,
+  subject_id,
+  request_digest,
+  response_json,
+  created_at
+FROM workshop_operation_receipts_v9;
+
+DROP TABLE workshop_operation_receipts_v9;
+
+CREATE INDEX workshop_operation_receipts_subject_idx
+  ON workshop_operation_receipts (
+    installation_id,
+    operation,
+    subject_id,
+    created_at
+  );
+
+UPDATE workshop_schema
+SET version = 10,
+    package_version = '0.5.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
+  {
+    id: '0011_administration_control_plane',
+    checksum:
+      'sha256:603c51fa50d12f45c23ca41e3c7cc765968b1e64499e89530e98335ccc5e417d',
+    sql: `CREATE TABLE workshop_authorization_principals (
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  lifecycle TEXT NOT NULL CHECK (
+    lifecycle IN ('active', 'disabled', 'revoked')
+  ),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, principal_id)
+);
+
+CREATE TABLE workshop_workspace_memberships (
+  installation_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  active INTEGER NOT NULL CHECK (active IN (0, 1)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, principal_id, workspace_id)
+);
+
+CREATE TABLE workshop_oauth_bindings (
+  installation_id TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  active INTEGER NOT NULL CHECK (active IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, issuer, subject)
+);
+
+CREATE INDEX workshop_oauth_bindings_principal_idx
+  ON workshop_oauth_bindings (
+    installation_id,
+    principal_id,
+    workspace_id,
+    active
+  );
+
+CREATE TABLE workshop_authorization_admin_receipts (
+  installation_id TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  request_digest TEXT NOT NULL CHECK (
+    length(request_digest) = 64
+    AND request_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, actor_principal_id, idempotency_key)
+);
+
+CREATE TABLE workshop_authorization_audit (
+  audit_id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  authorization_revision INTEGER NOT NULL CHECK (
+    authorization_revision >= 1
+  ),
+  details_json TEXT NOT NULL CHECK (json_valid(details_json)),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX workshop_authorization_audit_installation_idx
+  ON workshop_authorization_audit (
+    installation_id,
+    created_at DESC,
+    audit_id
+  );
+
+CREATE TABLE workshop_semantic_configuration_state (
+  installation_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  fingerprint TEXT NOT NULL CHECK (
+    length(fingerprint) = 64
+    AND fingerprint NOT GLOB '*[^0-9a-f]*'
+  ),
+  configuration_json TEXT NOT NULL CHECK (json_valid(configuration_json)),
+  ready INTEGER NOT NULL CHECK (ready IN (0, 1)),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE workshop_semantic_configuration_receipts (
+  installation_id TEXT NOT NULL,
+  actor_principal_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL CHECK (
+    length(request_digest) = 64
+    AND request_digest NOT GLOB '*[^0-9a-f]*'
+  ),
+  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (installation_id, actor_principal_id, idempotency_key)
+);
+
+UPDATE workshop_schema
+SET version = 11,
+    package_version = '0.5.0',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE singleton = 1;`,
+  },
 ] as const;
 
 export const expectedWorkshopTables = [
+  'workshop_authorization_admin_receipts',
+  'workshop_authorization_audit',
+  'workshop_authorization_principals',
   'workshop_cursor_entries',
   'workshop_cursor_snapshots',
   'workshop_bootstrap_receipts',
@@ -578,17 +772,22 @@ export const expectedWorkshopTables = [
   'workshop_memories',
   'workshop_onboarding_runs',
   'workshop_onboarding_steps',
+  'workshop_oauth_bindings',
   'workshop_operation_receipts',
   'workshop_prompt_revisions',
   'workshop_prompts',
   'workshop_schema',
+  'workshop_semantic_configuration_receipts',
+  'workshop_semantic_configuration_state',
   'workshop_task_revisions',
   'workshop_task_lease_events',
   'workshop_task_lease_receipts',
   'workshop_tasks',
+  'workshop_workspace_memberships',
 ] as const;
 
 export const expectedWorkshopIndexes = [
+  'workshop_authorization_audit_installation_idx',
   'workshop_cursor_snapshots_expiry_idx',
   'workshop_credentials_principal_idx',
   'workshop_memory_revisions_history_idx',
@@ -597,6 +796,7 @@ export const expectedWorkshopIndexes = [
   'workshop_memories_updated_idx',
   'workshop_onboarding_runs_state_idx',
   'workshop_onboarding_steps_state_idx',
+  'workshop_oauth_bindings_principal_idx',
   'workshop_operation_receipts_subject_idx',
   'workshop_prompt_revisions_history_idx',
   'workshop_prompts_authorization_idx',

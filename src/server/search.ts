@@ -107,6 +107,12 @@ export interface CreateWorkshopSearchIntegrationOptionsV1 {
   registrationContext: AuthorizationContext;
   clock?: () => Date;
   createId?: () => string;
+  semantic?: {
+    fetch?: typeof fetch;
+    resolveCredential?: (
+      selector: string,
+    ) => string | Promise<string | undefined> | undefined;
+  };
 }
 
 const SEARCH_NAMESPACE = 'workshop';
@@ -236,6 +242,10 @@ export async function createWorkshopSearchIntegrationV1(
     installationId: options.installationId,
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.createId ? { createId: options.createId } : {}),
+    ...(options.semantic?.fetch ? { fetch: options.semantic.fetch } : {}),
+    ...(options.semantic?.resolveCredential
+      ? { resolveCredential: options.semantic.resolveCredential }
+      : {}),
   });
   const rawService = createAuthorizedSearchServiceV1(options.db, {
     installationId: options.installationId,

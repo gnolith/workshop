@@ -14,6 +14,7 @@ const MEDIA_TYPES = new Set([
   'text/html; charset=utf-8',
 ]);
 const RESERVED_PREFIXES = ['/mcp', '/health', '/api', '/.well-known'];
+export const WORKSHOP_RECOMMENDED_ASSET_PREFIX = '/app' as const;
 
 export interface WaystoneAssetManifest {
   format: 'waystone-assets-v1';
@@ -43,7 +44,7 @@ export async function verifyWaystoneAssetMount(input: {
   manifest: unknown;
   source: WaystoneAssetSource;
 }): Promise<VerifiedWaystoneAssets> {
-  const prefix = normalizePrefix(input.prefix);
+  const prefix = validateWorkshopAssetPrefix(input.prefix);
   const manifest = exactManifest(input.manifest);
   const withoutDigest = {
     format: manifest.format,
@@ -93,12 +94,12 @@ export async function verifyWaystoneAssetMount(input: {
     serve(pathname) {
       if (!pathname.startsWith(`${prefix}/`) && pathname !== prefix)
         return Promise.resolve(null);
-      const suffix =
-        pathname === prefix
-          ? manifest.entrypoint
-          : decodeURIComponent(pathname.slice(prefix.length + 1));
       let normalized: string;
       try {
+        const suffix =
+          pathname === prefix
+            ? manifest.entrypoint
+            : decodeURIComponent(pathname.slice(prefix.length + 1));
         normalized = normalizeAssetPath(suffix);
       } catch {
         return Promise.resolve(null);
@@ -164,11 +165,10 @@ function exactManifest(value: unknown): WaystoneAssetManifest {
   };
 }
 
-function normalizePrefix(value: string): string {
+export function validateWorkshopAssetPrefix(value: string): string {
   if (
     typeof value !== 'string' ||
-    !/^\/[a-z0-9][a-z0-9/_-]*$/u.test(value) ||
-    value.endsWith('/') ||
+    !/^\/[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*)*$/u.test(value) ||
     RESERVED_PREFIXES.some(
       (reserved) =>
         value === reserved ||

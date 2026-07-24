@@ -25,8 +25,8 @@ const principal: AuthenticatedPrincipal = {
 
 describe('architecture reset contract', () => {
   it('publishes one exact operation registry and seven search kinds', () => {
-    expect(operationCatalog).toHaveLength(51);
-    expect(new Set(operationCatalog.map(({ name }) => name)).size).toBe(51);
+    expect(operationCatalog).toHaveLength(52);
+    expect(new Set(operationCatalog.map(({ name }) => name)).size).toBe(52);
     expect(CATALOG_DIGEST).toMatch(/^[a-f0-9]{64}$/u);
     expect(WORKSHOP_SEARCH_KINDS).toEqual([
       'statement',
@@ -99,7 +99,7 @@ describe('architecture reset contract', () => {
     const body = (await allowed.json()) as {
       result: { tools: Array<{ name: string }> };
     };
-    expect(body.result.tools).toHaveLength(51);
+    expect(body.result.tools).toHaveLength(52);
     expect(body.result.tools[0]?.name).toBe('gnolith_status');
   });
 
@@ -165,7 +165,7 @@ describe('architecture reset contract', () => {
     const api = createWorkshopBackupApi({
       owner,
       ledger,
-      schemaVersion: 9,
+      schemaVersion: 11,
       clock: () => new Date('2026-07-23T12:00:00.000Z'),
     });
     const backup = await api.exportBackup('installation:test');
@@ -181,7 +181,7 @@ describe('architecture reset contract', () => {
       createWorkshopBackupApi({
         owner,
         ledger: { ...ledger, connectionId: 'forged' },
-        schemaVersion: 9,
+        schemaVersion: 11,
       }),
     ).toThrow(/binding/u);
   });
@@ -204,14 +204,20 @@ describe('architecture reset contract', () => {
             baseIri: 'https://example.invalid/',
             migrations: {
               namespace: '@gnolith/workshop' as const,
-              version: 9,
+              version: 11,
               ready: true,
             },
             compatibility: { diamond: true, taproot: true },
             canonicalReady: true,
             authorizationReady: true,
             lexicalReady: true,
-            semantic: { state: 'ready' as const, configured: true },
+            semantic: {
+              state: 'ready' as const,
+              configured: true,
+              revision: 1,
+              fingerprint: 'd'.repeat(64),
+              ready: true,
+            },
             producers: {
               ready: true,
               fingerprint: 'c'.repeat(64),
@@ -248,10 +254,77 @@ describe('architecture reset contract', () => {
     ).resolves.toMatchObject({
       installationId: principal.installationId,
       principalId: principal.principalId,
-      migrationReadiness: { version: 9, ready: true },
-      semanticState: { state: 'ready', configured: true },
-      versions: { server: '0.5.0', operationSchema: 1 },
+      migrationReadiness: { version: 11, ready: true },
+      semanticState: {
+        state: 'ready',
+        configured: true,
+        revision: 1,
+        fingerprint: 'd'.repeat(64),
+        ready: true,
+      },
+      versions: { server: '0.5.0', operationSchema: 2 },
       operationCatalogDigest: CATALOG_DIGEST,
     });
+  });
+
+  it('rejects malformed entity commands before Taproot dispatch', async () => {
+    let dispatched = 0;
+    const runtime = createOperationRuntime({
+      version: '0.5.0',
+      taproot: {
+        async call() {
+          dispatched += 1;
+          return {};
+        },
+        async createScopedSparqlView() {
+          return {};
+        },
+        async recheckPrincipal() {
+          return principal;
+        },
+        async status() {
+          throw new Error('unused');
+        },
+      },
+      diamond: {
+        async validate() {
+          return {};
+        },
+        async query() {
+          return {};
+        },
+      },
+      workshop: {
+        async call() {
+          return {};
+        },
+      },
+    });
+    await expect(
+      runtime.call(
+        'mutate_entity',
+        {
+          entityId: 'Q1',
+          expectedRevision: 1,
+          idempotencyKey: 'invalid-statement',
+          mutations: [
+            {
+              kind: 'statement',
+              authoredText: 'Malformed statement must not commit.',
+              value: { type: 'add-statement', statement: {} },
+            },
+          ],
+        },
+        {
+          principal,
+          requestId: 'request:invalid-statement',
+          signal: new AbortController().signal,
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      status: 400,
+    });
+    expect(dispatched).toBe(0);
   });
 });

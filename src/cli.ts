@@ -2,9 +2,12 @@
 import {
   assembleWorkshopExecutable,
   runWorkshopBootstrap,
+  runWorkshopSemanticConfiguration,
 } from './executable.js';
 import type { BootstrapWorkshopV1Input } from './bootstrap.js';
+import type { ConfigureWorkshopSemanticsV1Input } from './semantic-configuration.js';
 import { normalizeWorkshopError } from './protocol/errors.js';
+import { readFile } from 'node:fs/promises';
 
 const command = process.argv[2];
 
@@ -66,9 +69,23 @@ try {
       profile: 'local-bearer-v1',
     } satisfies BootstrapWorkshopV1Input);
     process.stdout.write(`${JSON.stringify(receipt)}\n`);
+  } else if (command === 'configure-semantics-v1') {
+    const options = parseOptions(process.argv.slice(3));
+    assertOnlyOptions(options, ['--config', '--input']);
+    const bytes = await readFile(required(options, '--input'));
+    if (bytes.byteLength > 1024 * 1024)
+      throw new Error('Semantic configuration input is too large');
+    const input = JSON.parse(
+      new TextDecoder().decode(bytes),
+    ) as ConfigureWorkshopSemanticsV1Input;
+    const receipt = await runWorkshopSemanticConfiguration(
+      required(options, '--config'),
+      input,
+    );
+    process.stdout.write(`${JSON.stringify(receipt)}\n`);
   } else {
     throw new Error(
-      'Usage: gnolith-workshop serve --config <path> | bootstrap-v1 --config <path> --installation-id <id> --base-iri <iri> --principal <id> --workspace <id> --credential-file <path> --idempotency-key <key>',
+      'Usage: gnolith-workshop serve --config <path> | bootstrap-v1 --config <path> --installation-id <id> --base-iri <iri> --principal <id> --workspace <id> --credential-file <path> --idempotency-key <key> | configure-semantics-v1 --config <path> --input <json-file>',
     );
   }
 } catch (error) {
