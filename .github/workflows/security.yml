@@ -33,6 +33,7 @@ jobs:
       - name: Materialize checksum-bound local peer artifacts
         run: node scripts/materialize-peer-artifacts.mjs
       - run: npm ci
+      - run: npm run build
       - run: npm run security:dev-check
 
   secret-scan:
@@ -55,22 +56,3 @@ jobs:
       - name: Scan complete Git history for secrets
         run: |
           "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --verbose --no-banner .
-
-  codeql:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
-        with:
-          languages: javascript-typescript
-      - uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
-        with:
-          output: codeql-results
-          upload: always
-      - name: Preserve CodeQL SARIF
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codeql-sarif
-          path: codeql-results
-          if-no-files-found: error

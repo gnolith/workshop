@@ -133,7 +133,7 @@
     "@gnolith/diamond": "file:../diamond/gnolith-diamond-0.5.0.tgz",
     "@gnolith/taproot": "file:../taproot-artifacts/gnolith-taproot-0.5.0.tgz",
     "@types/node": "^24.0.0",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^4.1.10",
     "ajv-formats": "^3.0.1",
     "eslint": "^10.7.0",
     "miniflare": "^4.20260714.0",
@@ -141,10 +141,11 @@
     "tar-stream": "^3.1.7",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
+    "brace-expansion": "5.0.8",
     "sharp": "0.35.3"
   },
   "license": "MIT",
