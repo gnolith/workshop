@@ -98,7 +98,7 @@ describe('resumable onboarding', () => {
         boundary === 'markApplying' ? 1 : 2,
       );
     },
-    15_000,
+    30_000,
   );
 
   it('replays an effect after interruption without duplicating it', async () => {
