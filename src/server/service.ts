@@ -445,13 +445,35 @@ function nodeRequest(
 }
 
 function rejectEncodedTraversalTarget(rawTarget: string): void {
-  const path = rawTarget.split('?', 1)[0] ?? '';
-  if (/%(?:2e|2f|5c)/iu.test(path))
-    throw new WorkshopError(
-      'bad_request',
-      'Encoded path traversal is not allowed',
-      400,
-    );
+  let path = rawTarget.split(/[?#]/u, 1)[0] ?? '';
+  const absolute = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/]*(.*)$/u.exec(path);
+  if (absolute) path = absolute[1] || '/';
+  let candidate = path;
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (/%(?:2e|2f|5c)/iu.test(candidate)) throw encodedTraversal();
+    if (
+      candidate
+        .split(/[\\/]/u)
+        .some((segment) => segment === '.' || segment === '..')
+    )
+      throw encodedTraversal();
+    if (!/%[0-9a-f]{2}/iu.test(candidate)) break;
+    try {
+      const decoded = decodeURIComponent(candidate);
+      if (decoded === candidate) break;
+      candidate = decoded;
+    } catch {
+      throw encodedTraversal();
+    }
+  }
+}
+
+function encodedTraversal(): WorkshopError {
+  return new WorkshopError(
+    'bad_request',
+    'Encoded path traversal is not allowed',
+    400,
+  );
 }
 
 async function writeNodeResponse(

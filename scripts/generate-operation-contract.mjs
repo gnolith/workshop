@@ -169,6 +169,11 @@ const policyRevision = {
   maximum: 1_000_000_000,
 };
 const digest = { type: 'string', pattern: '^[a-f0-9]{64}$' };
+const localBearerTokenDigest = {
+  ...digest,
+  description:
+    'Lowercase hexadecimal SHA-256 of UTF-8 "gnolith-local-bearer-v1\\u0000" followed by the 32 bytes obtained by base64url-decoding the exact 43-character bearer token.',
+};
 const visibilityAtom = {
   oneOf: [
     object({ kind: { const: 'public' } }, ['kind']),
@@ -269,7 +274,7 @@ operation(
           credential: object(
             {
               credentialId: id,
-              tokenDigest: digest,
+              tokenDigest: localBearerTokenDigest,
               principalId: id,
               workspaceId: id,
             },

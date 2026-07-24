@@ -182,6 +182,26 @@ export async function digestLocalBearerToken(
   }
 }
 
+/**
+ * Computes the exact digest accepted by authorization_admin credential-register.
+ * The bearer text is never persisted or returned.
+ */
+export async function digestLocalBearerCredentialText(
+  token: string,
+): Promise<string> {
+  if (!BASE64URL_32.test(token)) throw invalidCredential();
+  const decoded = base64urlDecode(token);
+  if (decoded.byteLength !== 32 || base64urlEncode(decoded) !== token) {
+    decoded.fill(0);
+    throw invalidCredential();
+  }
+  try {
+    return await digestLocalBearerToken(decoded);
+  } finally {
+    decoded.fill(0);
+  }
+}
+
 export function decodeLocalBearerCredentialFile(bytes: Uint8Array): Uint8Array {
   if (bytes.byteLength !== 43 && bytes.byteLength !== 44)
     throw invalidCredential();

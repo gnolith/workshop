@@ -401,6 +401,7 @@ async function searchAdministration(
   context: AuthorizationContext,
   callContext: OperationCallContext,
 ): Promise<unknown> {
+  callContext.signal.throwIfAborted();
   const action = requiredString(input.action);
   const values = record(input.options ?? {});
   const limit = typeof input.limit === 'number' ? input.limit : 100;
@@ -422,6 +423,9 @@ async function searchAdministration(
           ? { maxChunkBytes: values.maxChunkBytes }
           : {}),
       });
+      const health = truthfulMaterializationHealth(
+        await runtime.materialization.health(context),
+      );
       return {
         claimed: receipt.claimed,
         completed: receipt.completed,
@@ -429,6 +433,12 @@ async function searchAdministration(
         deferred: receipt.deferred,
         dead: receipt.dead,
         rebuildRootsEnumerated: receipt.rebuildRootsEnumerated,
+        job: {
+          state: 'completed',
+          requestedLimit: limit,
+        },
+        result: { ...receipt },
+        health,
       };
     }
     case 'retry-dead':

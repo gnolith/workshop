@@ -31,6 +31,10 @@
   transport-authenticated caller, serialized manual and automatic search
   materialization, fenced simultaneous task claims, and rejected encoded
   asset traversal before Node URL normalization.
+- Defined the exact domain-separated local-bearer credential digest in the
+  public operation schema, exposed its safe digest helper, hardened
+  recursively encoded dot-segment rejection, and returned bounded manual
+  materialization job/result/health evidence.
 - Removed legacy operation aliases, UI and CSS exports, Site route factories,
   stdio transport, and the parallel hand-written MCP catalog.
 

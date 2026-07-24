@@ -38,6 +38,12 @@ as unpadded base64url, optionally followed by one LF. The token is never a
 command argument and only its domain-separated digest is persisted.
 Bootstrap requires Workshop schema version 11 and commits that credential digest
 plus an owner receipt through Taproot's sealed owner-adapter API.
+For `authorization_admin` `credential-register`, callers supply only the
+lowercase hexadecimal digest defined in the operation schema:
+`SHA-256(UTF-8("gnolith-local-bearer-v1\0") || base64urlDecode(token))`.
+`digestLocalBearerCredentialText` from `@gnolith/workshop/server` computes that
+value. The operation returns only credential ID metadata; plaintext bearer
+material is never returned, persisted, or written to administration audit data.
 
 Offline semantic configuration also runs before the listener:
 

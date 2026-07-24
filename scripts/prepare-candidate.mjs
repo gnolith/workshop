@@ -54,7 +54,7 @@ const inventory = {
   sbom,
   sbomSha256,
   catalogDigest:
-    'a57799a792a075a5e359567240a7241a48df4155fae3a9e73b092ccf9035955b',
+    '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224',
   schemaVersion: 11,
   migrationNamespace: '@gnolith/workshop',
   migrations: await Promise.all(

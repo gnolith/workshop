@@ -20,6 +20,7 @@ import {
 } from '../src/operations.js';
 import type { AuthorizationContext } from '../src/protocol.js';
 import { createWorkshopCore } from '../src/server/context.js';
+import { digestLocalBearerCredentialText } from '../src/server/auth.js';
 import { createWorkshopSearchIntegrationV1 } from '../src/server/search.js';
 import { createWorkshopTaprootOperationPortV1 } from '../src/taproot-operation.js';
 import type {
@@ -241,21 +242,66 @@ describe('Workshop external search producers', () => {
         context.principal,
         context.signal,
       );
-      const visible = (await admin({
+      let targetRevision = entity.newRevision;
+      for (const [index, value] of [
+        'Authorized visible item revision two',
+        'Authorized visible item revision three',
+      ].entries()) {
+        const revised = (await operations.call(
+          'mutate_entity',
+          {
+            entityId: entity.entityId,
+            expectedRevision: targetRevision,
+            idempotencyKey: `authorization-visible-item-revision-${index + 2}`,
+            mutations: [
+              {
+                kind: 'label',
+                authoredText: `Set the bounded authorization fixture label revision ${index + 2}.`,
+                value: {
+                  type: 'set-label',
+                  language: 'en',
+                  value,
+                },
+              },
+            ],
+          },
+          context,
+        )) as { newRevision: number };
+        targetRevision = revised.newRevision;
+        context.principal = await port.recheckPrincipal(
+          context.principal,
+          context.signal,
+        );
+      }
+      expect(targetRevision).toBe(3);
+      const visibilityInput = {
         version: 1,
         action: 'visibility-policy-set',
         expectedPolicyRevision: context.principal.authorizationRevision,
         idempotencyKey: 'visibility-worker-v1',
         target: { kind: 'entity', id: entity.entityId },
-        expectedTargetRevision: entity.newRevision,
+        expectedTargetRevision: targetRevision,
         visibility: {
           version: 1,
           clauses: [
             [{ kind: 'workspace', workspaceId: 'workspace:admin-test' }],
           ],
         },
-      })) as { policyRevision: number };
+      } as const;
+      const visible = (await admin(visibilityInput)) as {
+        policyRevision: number;
+      };
       context.principal.authorizationRevision = visible.policyRevision;
+      await expect(admin(visibilityInput)).resolves.toMatchObject({
+        status: 'replayed',
+        policyRevision: visible.policyRevision,
+      });
+      await expect(
+        admin({
+          ...visibilityInput,
+          visibility: { version: 1, clauses: [] },
+        }),
+      ).rejects.toMatchObject({ code: 'conflict', status: 409 });
       const workerPrincipal = await port.recheckPrincipal(
         {
           ...context.principal,
@@ -274,6 +320,10 @@ describe('Workshop external search producers', () => {
         ),
       ).resolves.toMatchObject({ entity: { id: entity.entityId } });
 
+      const workerToken = Buffer.from(
+        Uint8Array.from({ length: 32 }, (_, index) => 255 - index),
+      ).toString('base64url');
+      const workerDigest = await digestLocalBearerCredentialText(workerToken);
       const registered = (await admin({
         version: 1,
         action: 'credential-register',
@@ -281,7 +331,7 @@ describe('Workshop external search producers', () => {
         idempotencyKey: 'credential-worker-v1',
         credential: {
           credentialId: 'credential:worker',
-          tokenDigest: 'a'.repeat(64),
+          tokenDigest: workerDigest,
           principalId: 'principal:worker',
           workspaceId: 'workspace:admin-test',
         },
@@ -295,7 +345,17 @@ describe('Workshop external search producers', () => {
           )
           .bind(installationId, 'credential:worker')
           .first(),
-      ).resolves.toEqual({ token_digest: 'a'.repeat(64), disabled: 0 });
+      ).resolves.toEqual({ token_digest: workerDigest, disabled: 0 });
+      const credentialAudit = await workshopDb
+        .prepare(
+          `SELECT details_json FROM workshop_authorization_audit
+           WHERE installation_id = ? AND action = 'credential-register'
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .bind(installationId)
+        .first<{ details_json: string }>();
+      expect(credentialAudit?.details_json).not.toContain(workerToken);
+      expect(credentialAudit?.details_json).not.toContain(workerDigest);
 
       const credentialRevoked = (await admin({
         version: 1,
@@ -543,6 +603,81 @@ describe('Workshop external search producers', () => {
         context,
       )) as { authorizationRevision: number };
       context.principal.authorizationRevision = item.authorizationRevision;
+      const beforeNoop = await workshopDb
+        .prepare(
+          `SELECT authorization_revision, search_generation
+           FROM taproot_installation_authorization
+           WHERE singleton = 1 AND installation_id = ?`,
+        )
+        .bind(installationId)
+        .first<{
+          authorization_revision: number;
+          search_generation: number;
+        }>();
+      const sourceEventsBefore = Number(
+        (
+          await workshopDb
+            .prepare(
+              `SELECT COUNT(*) AS count
+               FROM taproot_unified_search_source_events
+               WHERE installation_id = ?`,
+            )
+            .bind(installationId)
+            .first<{ count: number }>()
+        )?.count ?? 0,
+      );
+      const identicalMutations = await Promise.all(
+        ['concurrent-a', 'concurrent-b'].map((suffix) =>
+          port.call(
+            'mutate_entity',
+            {
+              entityId: 'Q1',
+              expectedRevision: 1,
+              idempotencyKey: `item-identical-label-${suffix}`,
+              mutations: [
+                {
+                  kind: 'label',
+                  authoredText: 'Preserve the identical subject label.',
+                  value: {
+                    type: 'set-label',
+                    language: 'en',
+                    value: 'Subject',
+                  },
+                },
+              ],
+            },
+            context,
+          ),
+        ),
+      );
+      for (const identical of identicalMutations)
+        expect(identical).toMatchObject({
+          changed: false,
+          previousRevision: 1,
+          newRevision: 1,
+          quadPatch: { deleted: 0, inserted: 0 },
+          authorizationRevision: item.authorizationRevision,
+        });
+      await expect(
+        workshopDb
+          .prepare(
+            `SELECT authorization_revision, search_generation
+             FROM taproot_installation_authorization
+             WHERE singleton = 1 AND installation_id = ?`,
+          )
+          .bind(installationId)
+          .first(),
+      ).resolves.toEqual(beforeNoop);
+      await expect(
+        workshopDb
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM taproot_unified_search_source_events
+             WHERE installation_id = ?`,
+          )
+          .bind(installationId)
+          .first(),
+      ).resolves.toEqual({ count: sourceEventsBefore });
       const statementId = 'Q1$statement-1';
       const valueSnak = {
         snaktype: 'value',
@@ -582,6 +717,7 @@ describe('Workshop external search producers', () => {
         quadPatch: { inserted: number };
       };
       expect(added.newRevision).toBe(2);
+      expect((added as typeof added & { changed: boolean }).changed).toBe(true);
       expect(added.quadPatch.inserted).toBeGreaterThan(0);
       context.principal.authorizationRevision = (
         added as typeof added & { authorizationRevision: number }

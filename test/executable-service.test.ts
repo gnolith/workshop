@@ -170,6 +170,10 @@ describe('executable listener and authentication', () => {
       for (const target of [
         '/app/%2e%2e/mcp',
         '/app/%2E%2E/health/live',
+        '/app/%252e%252e/mcp',
+        '/app/%252E%252E/health/live',
+        '/app/%2e%2E/health/live',
+        '/app/../mcp',
         '/app%2f..%2fmcp',
         '/app/%5c..%5chealth/live',
       ]) {

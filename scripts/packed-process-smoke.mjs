@@ -290,6 +290,137 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   const origin = `http://127.0.0.1:${port}`;
   await waitForLive(origin, child);
+  const delegatedTokenBytes = Uint8Array.from(
+    { length: 32 },
+    (_, index) => 255 - index,
+  );
+  const delegatedToken = Buffer.from(delegatedTokenBytes).toString('base64url');
+  const delegatedDigest = createHash('sha256')
+    .update(Buffer.from('gnolith-local-bearer-v1\0', 'utf8'))
+    .update(delegatedTokenBytes)
+    .digest('hex');
+  let policyRevision = (
+    await successfulToolCall(origin, token, 100, 'gnolith_status', {})
+  ).authorizationRevision;
+  const authorizationMutation = async (id, argumentsValue) => {
+    const result = await successfulToolCall(
+      origin,
+      token,
+      id,
+      'authorization_admin',
+      {
+        version: 1,
+        expectedPolicyRevision: policyRevision,
+        ...argumentsValue,
+      },
+    );
+    policyRevision = result.policyRevision;
+    return result;
+  };
+  await authorizationMutation(101, {
+    action: 'principal-create',
+    idempotencyKey: 'packed-delegated-principal-v1',
+    principal: { principalId: 'principal:delegated', enabled: true },
+  });
+  await authorizationMutation(102, {
+    action: 'workspace-membership-add',
+    idempotencyKey: 'packed-delegated-membership-v1',
+    principalId: 'principal:delegated',
+    workspaceId: 'workspace:packed',
+  });
+  for (const [index, capability] of [
+    'read',
+    'admin',
+    'search:admin',
+  ].entries()) {
+    await authorizationMutation(103 + index, {
+      action: 'workspace-grant-add',
+      idempotencyKey: `packed-delegated-grant-${capability}-v1`,
+      principalId: 'principal:delegated',
+      workspaceId: 'workspace:packed',
+      capability,
+    });
+  }
+  const registered = await authorizationMutation(105, {
+    action: 'credential-register',
+    idempotencyKey: 'packed-delegated-credential-v1',
+    credential: {
+      credentialId: 'credential:delegated',
+      tokenDigest: delegatedDigest,
+      principalId: 'principal:delegated',
+      workspaceId: 'workspace:packed',
+    },
+  });
+  assert.doesNotMatch(
+    JSON.stringify(registered),
+    new RegExp(delegatedToken, 'u'),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(registered),
+    new RegExp(delegatedDigest, 'u'),
+  );
+  const delegatedStatus = await successfulToolCall(
+    origin,
+    delegatedToken,
+    106,
+    'gnolith_status',
+    {},
+  );
+  assert.equal(delegatedStatus.principalId, 'principal:delegated');
+  await successfulToolCall(origin, delegatedToken, 107, 'authorization_admin', {
+    version: 1,
+    action: 'effective-policy',
+    target: { kind: 'entity', id: 'Q1' },
+  });
+  const delegatedGrant = await successfulToolCall(
+    origin,
+    delegatedToken,
+    108,
+    'authorization_admin',
+    {
+      version: 1,
+      action: 'workspace-grant-add',
+      expectedPolicyRevision: policyRevision,
+      idempotencyKey: 'packed-delegated-self-policy-v1',
+      principalId: 'principal:delegated',
+      workspaceId: 'workspace:packed',
+      capability: 'knowledge:policy',
+    },
+  );
+  policyRevision = delegatedGrant.policyRevision;
+  await authorizationMutation(109, {
+    action: 'credential-revoke',
+    idempotencyKey: 'packed-delegated-credential-revoke-v1',
+    credentialId: 'credential:delegated',
+  });
+  assert.equal(
+    await mcpHttpStatus(origin, delegatedToken, 110, 'gnolith_status', {}),
+    401,
+  );
+  await authorizationMutation(111, {
+    action: 'credential-register',
+    idempotencyKey: 'packed-delegated-credential-reregister-v1',
+    credential: {
+      credentialId: 'credential:delegated',
+      tokenDigest: delegatedDigest,
+      principalId: 'principal:delegated',
+      workspaceId: 'workspace:packed',
+    },
+  });
+  await successfulToolCall(origin, delegatedToken, 112, 'gnolith_status', {});
+  await authorizationMutation(113, {
+    action: 'principal-disable',
+    idempotencyKey: 'packed-delegated-principal-disable-v1',
+    principalId: 'principal:delegated',
+  });
+  assert.equal(
+    await mcpHttpStatus(origin, delegatedToken, 114, 'gnolith_status', {}),
+    401,
+  );
+  await successfulToolCall(origin, token, 115, 'authorization_admin', {
+    version: 1,
+    action: 'status',
+  });
   const created = await mcp(origin, token, 4, 'tools/call', {
     name: 'create_item',
     arguments: {
@@ -304,6 +435,140 @@ export async function createWorkshopSemanticConfigurationDependencies(
     },
   });
   assert.equal(created.result?.isError, false, JSON.stringify(created));
+  const beforeIdenticalStatus = await successfulToolCall(
+    origin,
+    token,
+    116,
+    'gnolith_status',
+    {},
+  );
+  const beforeIdenticalHealth = await successfulToolCall(
+    origin,
+    token,
+    117,
+    'search_admin',
+    { action: 'health' },
+  );
+  const identicalCalls = await Promise.all(
+    ['a', 'b'].map((suffix, index) =>
+      successfulToolCall(origin, token, 118 + index, 'mutate_entity', {
+        entityId: 'Q1',
+        expectedRevision: 1,
+        idempotencyKey: `packed-identical-label-${suffix}`,
+        mutations: [
+          {
+            kind: 'label',
+            authoredText: 'Preserve the packed restart item label.',
+            value: {
+              type: 'set-label',
+              language: 'en',
+              value: 'Packed restart item',
+            },
+          },
+        ],
+      }),
+    ),
+  );
+  for (const identical of identicalCalls) {
+    assert.equal(identical.changed, false);
+    assert.equal(identical.newRevision, 1);
+    assert.deepEqual(identical.quadPatch, { deleted: 0, inserted: 0 });
+  }
+  const afterIdenticalStatus = await successfulToolCall(
+    origin,
+    token,
+    120,
+    'gnolith_status',
+    {},
+  );
+  const afterIdenticalHealth = await successfulToolCall(
+    origin,
+    token,
+    121,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.equal(
+    afterIdenticalStatus.authorizationRevision,
+    beforeIdenticalStatus.authorizationRevision,
+  );
+  assert.equal(
+    afterIdenticalHealth.materialization.sourceHighWatermark,
+    beforeIdenticalHealth.materialization.sourceHighWatermark,
+  );
+  assert.equal(
+    afterIdenticalHealth.materialization.activeAppliedWatermark,
+    beforeIdenticalHealth.materialization.activeAppliedWatermark,
+  );
+  let entityRevision = 1;
+  for (const [index, value] of [
+    'Packed restart item revision two',
+    'Packed restart item revision three',
+  ].entries()) {
+    const changed = await successfulToolCall(
+      origin,
+      token,
+      122 + index,
+      'mutate_entity',
+      {
+        entityId: 'Q1',
+        expectedRevision: entityRevision,
+        idempotencyKey: `packed-changed-label-${index + 2}`,
+        mutations: [
+          {
+            kind: 'label',
+            authoredText: `Set packed label revision ${index + 2}.`,
+            value: { type: 'set-label', language: 'en', value },
+          },
+        ],
+      },
+    );
+    assert.equal(changed.changed, true);
+    entityRevision = changed.newRevision;
+  }
+  assert.equal(entityRevision, 3);
+  policyRevision = (
+    await successfulToolCall(origin, token, 124, 'gnolith_status', {})
+  ).authorizationRevision;
+  const visibilityArguments = {
+    version: 1,
+    action: 'visibility-policy-set',
+    expectedPolicyRevision: policyRevision,
+    idempotencyKey: 'packed-q1-visibility-v1',
+    target: { kind: 'entity', id: 'Q1' },
+    expectedTargetRevision: 3,
+    visibility: {
+      version: 1,
+      clauses: [[{ kind: 'workspace', workspaceId: 'workspace:packed' }]],
+    },
+  };
+  const visibility = await successfulToolCall(
+    origin,
+    token,
+    125,
+    'authorization_admin',
+    visibilityArguments,
+  );
+  policyRevision = visibility.policyRevision;
+  const visibilityReplay = await successfulToolCall(
+    origin,
+    token,
+    126,
+    'authorization_admin',
+    visibilityArguments,
+  );
+  assert.equal(visibilityReplay.status, 'replayed');
+  const visibilityConflict = await mcp(origin, token, 127, 'tools/call', {
+    name: 'authorization_admin',
+    arguments: {
+      ...visibilityArguments,
+      visibility: { version: 1, clauses: [] },
+    },
+  });
+  assert.ok(
+    visibilityConflict.error || visibilityConflict.result?.isError === true,
+    JSON.stringify(visibilityConflict),
+  );
   const laggedHealth = await mcp(origin, token, 5, 'tools/call', {
     name: 'search_admin',
     arguments: { action: 'health' },
@@ -513,7 +778,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   await terminate(child);
   process.stdout.write(
-    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: 'a57799a792a075a5e359567240a7241a48df4155fae3a9e73b092ccf9035955b' })}\n`,
+    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224' })}\n`,
   );
 } finally {
   if (child?.exitCode === null) await terminate(child);
@@ -538,6 +803,33 @@ async function mcp(origin, token, id, method, params) {
       }),
     })
   ).json();
+}
+
+async function successfulToolCall(origin, token, id, name, argumentsValue) {
+  const response = await mcp(origin, token, id, 'tools/call', {
+    name,
+    arguments: argumentsValue,
+  });
+  assert.equal(response.result?.isError, false, JSON.stringify(response));
+  return response.result.structuredContent;
+}
+
+async function mcpHttpStatus(origin, token, id, name, argumentsValue) {
+  const response = await fetch(`${origin}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }),
+  });
+  return response.status;
 }
 
 async function terminate(processHandle) {
