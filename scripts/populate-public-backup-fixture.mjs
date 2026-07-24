@@ -366,6 +366,6 @@ process.stdout.write(
     q1Visibility,
     q1EffectivePolicy,
     catalogDigest:
-      '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224',
+      'e2d1e0f09e4dbad786d14cb4a9dd86dbe56a64d274e252bbbb1956b2c8933c85',
   })}\n`,
 );

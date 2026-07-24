@@ -223,7 +223,10 @@ function semanticConfiguration(value: unknown): SemanticConfigurationV1 {
   )
     throw invalid('Semantic provider profile is invalid');
   const allowPrivateEndpoint = boolean(provider.allowPrivateEndpoint);
-  const providerEndpoint = endpoint(provider.endpoint, allowPrivateEndpoint);
+  const providerEndpoint = fullSemanticProviderEndpoint(
+    provider.kind,
+    endpoint(provider.endpoint, allowPrivateEndpoint),
+  );
   const model = identifier(provider.model, 512);
   const dimensions = integer(provider.dimensions);
   if (dimensions > 65_536)
@@ -365,6 +368,27 @@ function endpoint(value: unknown, allowPrivate: boolean): string {
       parsed.hostname === '::1')
   )
     throw invalid('Private semantic endpoint requires explicit approval');
+  return parsed.href;
+}
+
+function fullSemanticProviderEndpoint(
+  kind: 'openai-compatible' | 'ollama-compatible',
+  endpointValue: string,
+): string {
+  const parsed = new URL(endpointValue);
+  const terminal = kind === 'openai-compatible' ? '/embeddings' : '/api/embed';
+  if (
+    parsed.pathname.replace(/\/+$/u, '') !== terminal &&
+    !parsed.pathname.replace(/\/+$/u, '').endsWith(terminal)
+  )
+    throw invalid(
+      `Semantic ${kind} endpoint must be the exact ${terminal} POST URL`,
+    );
+  if (parsed.search || parsed.hash)
+    throw invalid(
+      'Semantic provider endpoint cannot contain query or fragment',
+    );
+  parsed.pathname = parsed.pathname.replace(/\/+$/u, '');
   return parsed.href;
 }
 

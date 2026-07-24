@@ -112,8 +112,29 @@ operation(
             ],
           },
           ready: { type: 'boolean' },
+          diagnostic: {
+            anyOf: [
+              object(
+                {
+                  code: {
+                    enum: ['materialization-pending', 'provider-unavailable'],
+                  },
+                  retryable: { type: 'boolean' },
+                },
+                ['code', 'retryable'],
+              ),
+              { type: 'null' },
+            ],
+          },
         },
-        ['state', 'configured', 'revision', 'fingerprint', 'ready'],
+        [
+          'state',
+          'configured',
+          'revision',
+          'fingerprint',
+          'ready',
+          'diagnostic',
+        ],
       ),
       producers: object(
         {
@@ -420,10 +441,15 @@ const semanticEndpoint = {
   pattern: '^https?://',
   maxLength: 4096,
 };
+const semanticProviderEndpoint = {
+  ...semanticEndpoint,
+  description:
+    'Exact embeddings POST URL: openai-compatible ends in /embeddings and ollama-compatible ends in /api/embed.',
+};
 const semanticProvider = object(
   {
     kind: { enum: ['openai-compatible', 'ollama-compatible'] },
-    endpoint: semanticEndpoint,
+    endpoint: semanticProviderEndpoint,
     model: text(512),
     dimensions: {
       type: 'integer',

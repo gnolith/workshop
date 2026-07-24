@@ -1,16 +1,19 @@
 /* global fetch */
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
+import { createServer as createHttpServer } from 'node:http';
 import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers';
+import { promisify } from 'node:util';
 
 const root = resolve(import.meta.dirname, '..');
+const execFileAsync = promisify(execFile);
 const packed = JSON.parse(
   execFileSync('npm', ['pack', '--json'], {
     cwd: root,
@@ -21,6 +24,8 @@ const packed = JSON.parse(
 const tarball = resolve(root, packed[0].filename);
 const fixture = mkdtempSync(join(tmpdir(), 'gnolith-workshop-process-'));
 let child;
+let semanticMock;
+let semanticMockPoints;
 try {
   writeFileSync(
     join(fixture, 'package.json'),
@@ -39,6 +44,10 @@ try {
     stdio: 'ignore',
     shell: process.platform === 'win32',
   });
+  const semanticMockRuntime = await startSemanticMock();
+  semanticMock = semanticMockRuntime.server;
+  semanticMockPoints = semanticMockRuntime.points;
+  const semanticMockOrigin = semanticMockRuntime.origin;
   const token = Buffer.from(
     Uint8Array.from({ length: 32 }, (_, index) => index),
   ).toString('base64url');
@@ -128,6 +137,13 @@ const adapter = await createWorkshopLocalExecutableAdapterFromPrimitivesV1({
   },
   migrationAssemblyAuthority:
     createMigrationAssemblyAuthorityV1(db, installationId),
+  semantic: {
+    resolveCredential(selector) {
+      if (selector === 'provider:packed') return 'packed-openai-secret';
+      if (selector === 'qdrant:packed') return 'packed-qdrant-secret';
+      return undefined;
+    },
+  },
   assets: async (config) => {
     if (!config.assetMount) return undefined;
     const root = fileURLToPath(new URL('./assets/', import.meta.url));
@@ -277,15 +293,15 @@ export async function createWorkshopSemanticConfigurationDependencies(
       idempotencyKey: 'packed-semantic-v1',
       configuration: {
         version: 1,
-        id: 'packed-ollama-sqlite-v1',
-        name: 'Packed Ollama SQLite',
+        id: 'packed-openai-sqlite-v1',
+        name: 'Packed OpenAI SQLite',
         provider: {
-          kind: 'ollama-compatible',
-          endpoint: 'http://127.0.0.1:11434/',
-          model: 'nomic-embed-text',
-          dimensions: 768,
+          kind: 'openai-compatible',
+          endpoint: `${semanticMockOrigin}/v1/embeddings`,
+          model: 'text-embedding-packed',
+          dimensions: 4,
           metric: 'cosine',
-          credentialSelector: null,
+          credentialSelector: 'provider:packed',
           allowPrivateEndpoint: true,
           redirectPolicy: 'error',
         },
@@ -294,21 +310,35 @@ export async function createWorkshopSemanticConfigurationDependencies(
     }),
   );
   const semanticReceipt = JSON.parse(
-    execFileSync(
-      process.execPath,
-      [
-        join(fixture, 'node_modules', '@gnolith', 'workshop', 'dist', 'cli.js'),
-        'configure-semantics-v1',
-        '--config',
-        join(fixture, 'config.json'),
-        '--input',
-        semanticInputPath,
-      ],
-      { cwd: fixture, encoding: 'utf8' },
-    ),
+    (
+      await execFileAsync(
+        process.execPath,
+        [
+          join(
+            fixture,
+            'node_modules',
+            '@gnolith',
+            'workshop',
+            'dist',
+            'cli.js',
+          ),
+          'configure-semantics-v1',
+          '--config',
+          join(fixture, 'config.json'),
+          '--input',
+          semanticInputPath,
+        ],
+        { cwd: fixture, encoding: 'utf8' },
+      )
+    ).stdout,
   );
-  assert.equal(semanticReceipt.configurationId, 'packed-ollama-sqlite-v1');
+  assert.equal(semanticReceipt.configurationId, 'packed-openai-sqlite-v1');
   assert.equal(semanticReceipt.revision, 1);
+  assert.equal(
+    semanticReceipt.state,
+    'building',
+    JSON.stringify(semanticReceipt),
+  );
   assert.match(semanticReceipt.fingerprint, /^[a-f0-9]{64}$/u);
   child = spawn(
     process.execPath,
@@ -781,6 +811,23 @@ export async function createWorkshopSemanticConfigurationDependencies(
       .activeAppliedWatermark,
     caughtUpHealth.result.structuredContent.materialization.sourceHighWatermark,
   );
+  const semanticEstimate = await successfulToolCall(
+    origin,
+    token,
+    214,
+    'search_admin',
+    {
+      action: 'semantic-estimate',
+      options: {
+        configurationId: 'packed-openai-sqlite-v1',
+        policy: { mode: 'asap', maxBatchesPerRun: 1 },
+      },
+    },
+  );
+  await successfulToolCall(origin, token, 215, 'search_admin', {
+    action: 'semantic-approve',
+    options: { planId: semanticEstimate.planId },
+  });
   const secondCreated = await mcp(origin, token, 14, 'tools/call', {
     name: 'create_item',
     arguments: {
@@ -853,6 +900,17 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   const recovered = await waitForReady(origin, token, child);
   assert.equal(recovered.lexicalReady, true);
+  assert.equal(recovered.semanticState.ready, true);
+  assert.equal(recovered.semanticState.diagnostic, null);
+  const semanticOnly = await successfulToolCall(origin, token, 216, 'search', {
+    text: 'meaning that has no lexical token overlap',
+    kinds: ['item'],
+    limit: 20,
+  });
+  assert.ok(
+    semanticOnly.items.some((entry) => entry.sourceId === 'Q900'),
+    JSON.stringify(semanticOnly),
+  );
   const recoveredHealth = await mcp(origin, token, 7, 'tools/call', {
     name: 'search_admin',
     arguments: { action: 'health' },
@@ -946,6 +1004,68 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ),
   );
   assert.equal(populated.format, 'gnolith-workshop-public-backup-fixture-v1');
+  assert.equal(populated.q1Visibility.target.id, 'Q1');
+  const q1PolicyRevision = (
+    await successfulToolCall(origin, token, 180, 'gnolith_status', {})
+  ).authorizationRevision;
+  const q1FailureArguments = {
+    version: 1,
+    action: 'visibility-policy-set',
+    expectedPolicyRevision: q1PolicyRevision,
+    expectedTargetRevision: 3,
+    visibility: {
+      version: 1,
+      clauses: [[{ kind: 'workspace', workspaceId: 'workspace:packed' }]],
+    },
+  };
+  for (const [id, expectedCode, argumentsValue] of [
+    [
+      181,
+      'conflict',
+      {
+        ...q1FailureArguments,
+        idempotencyKey: 'packed-q1-stale-v1',
+        target: { kind: 'entity', id: 'Q1' },
+      },
+    ],
+    [
+      182,
+      'not_found',
+      {
+        ...q1FailureArguments,
+        idempotencyKey: 'packed-q1-missing-v1',
+        target: { kind: 'entity', id: 'Q999' },
+      },
+    ],
+    [
+      183,
+      'validation_failed',
+      {
+        ...q1FailureArguments,
+        idempotencyKey: 'packed-q1-invalid-v1',
+        target: { kind: 'entity', id: 'Q0' },
+      },
+    ],
+  ]) {
+    const failed = await mcp(origin, token, id, 'tools/call', {
+      name: 'authorization_admin',
+      arguments: argumentsValue,
+    });
+    assert.equal(toolErrorCode(failed), expectedCode, JSON.stringify(failed));
+  }
+  const unauthorizedQ1 = await mcp(origin, outsiderToken, 184, 'tools/call', {
+    name: 'authorization_admin',
+    arguments: {
+      ...q1FailureArguments,
+      idempotencyKey: 'packed-q1-unauthorized-v1',
+      target: { kind: 'entity', id: 'Q1' },
+    },
+  });
+  assert.equal(
+    toolErrorCode(unauthorizedQ1),
+    'forbidden',
+    JSON.stringify(unauthorizedQ1),
+  );
   const allKindMaterialization = await successfulToolCall(
     origin,
     token,
@@ -1021,6 +1141,102 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ),
     JSON.stringify(statementSearches),
   );
+  const qdrantConfiguration = await successfulToolCall(
+    origin,
+    token,
+    220,
+    'search_admin',
+    {
+      action: 'configure',
+      options: {
+        expectedRevision: 0,
+        idempotencyKey: 'packed-openai-qdrant-v1',
+        configuration: {
+          version: 1,
+          id: 'packed-openai-qdrant-v1',
+          name: 'Packed OpenAI Qdrant',
+          provider: {
+            kind: 'openai-compatible',
+            endpoint: `${semanticMockOrigin}/v1/embeddings`,
+            model: 'text-embedding-packed',
+            dimensions: 4,
+            metric: 'cosine',
+            credentialSelector: 'provider:packed',
+            allowPrivateEndpoint: true,
+            redirectPolicy: 'error',
+          },
+          vector: {
+            kind: 'qdrant',
+            endpoint: semanticMockOrigin,
+            collection: 'packed_vectors',
+            credentialSelector: 'qdrant:packed',
+            allowPrivateEndpoint: true,
+            redirectPolicy: 'error',
+          },
+        },
+      },
+    },
+  );
+  assert.equal(qdrantConfiguration.configurationId, 'packed-openai-qdrant-v1');
+  const qdrantEstimate = await successfulToolCall(
+    origin,
+    token,
+    221,
+    'search_admin',
+    {
+      action: 'semantic-estimate',
+      options: {
+        configurationId: 'packed-openai-qdrant-v1',
+        policy: { mode: 'asap', maxBatchesPerRun: 2 },
+      },
+    },
+  );
+  await successfulToolCall(origin, token, 222, 'search_admin', {
+    action: 'semantic-approve',
+    options: { planId: qdrantEstimate.planId },
+  });
+  const qdrantReady = await waitForReady(origin, token, child);
+  assert.equal(qdrantReady.semanticState.ready, true);
+  assert.equal(qdrantReady.semanticState.diagnostic, null);
+  await terminate(child);
+  child = spawn(
+    process.execPath,
+    [
+      join(fixture, 'node_modules', '@gnolith', 'workshop', 'dist', 'cli.js'),
+      'serve',
+      '--config',
+      join(fixture, 'config.json'),
+    ],
+    { cwd: fixture, stdio: 'ignore' },
+  );
+  await waitForLive(origin, child);
+  const qdrantRestarted = await waitForReady(origin, token, child);
+  assert.equal(qdrantRestarted.semanticState.ready, true);
+  assert.ok(
+    [...semanticMockPoints.values()].some(
+      (point) => point.payload?.sourceId === 'Q1',
+    ),
+    JSON.stringify(
+      [...semanticMockPoints.values()].map(
+        (point) => point.payload?.sourceId ?? null,
+      ),
+    ),
+  );
+  const qdrantSemanticOnly = await successfulToolCall(
+    origin,
+    token,
+    223,
+    'search',
+    {
+      text: 'another phrase with no lexical overlap',
+      kinds: ['item'],
+      limit: 20,
+    },
+  );
+  assert.ok(
+    qdrantSemanticOnly.items.some((entry) => entry.sourceId === 'Q1'),
+    JSON.stringify(qdrantSemanticOnly),
+  );
   const secondBackupTask = await successfulToolCall(
     origin,
     token,
@@ -1048,6 +1264,71 @@ export async function createWorkshopSemanticConfigurationDependencies(
     result: 'Second backup fixture completed.',
     outcomeKind: 'success',
   });
+  await successfulToolCall(origin, token, 203, 'search_admin', {
+    action: 'materialize',
+    limit: 100,
+    options: { maxRebuildRoots: 100 },
+  });
+  const unavailableSemantic = await successfulToolCall(
+    origin,
+    token,
+    224,
+    'search_admin',
+    {
+      action: 'configure',
+      options: {
+        expectedRevision: 0,
+        idempotencyKey: 'packed-unavailable-semantic-v1',
+        configuration: {
+          version: 1,
+          id: 'packed-unavailable-semantic-v1',
+          name: 'Packed unavailable semantic endpoint',
+          provider: {
+            kind: 'openai-compatible',
+            endpoint: 'http://127.0.0.1:1/v1/embeddings',
+            model: 'text-embedding-packed',
+            dimensions: 4,
+            metric: 'cosine',
+            credentialSelector: 'provider:packed',
+            allowPrivateEndpoint: true,
+            redirectPolicy: 'error',
+          },
+          vector: { kind: 'sqlite' },
+        },
+      },
+    },
+  );
+  assert.equal(unavailableSemantic.ready, false);
+  const degraded = await fetch(`${origin}/health/ready`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(degraded.status, 503);
+  const degradedBody = await degraded.json();
+  assert.equal(degradedBody.lexicalReady, true);
+  assert.deepEqual(degradedBody.semanticState.diagnostic, {
+    code: 'provider-unavailable',
+    retryable: true,
+  });
+  assert.doesNotMatch(JSON.stringify(degradedBody), /127\.0\.0\.1|secret/u);
+  await terminate(child);
+  child = spawn(
+    process.execPath,
+    [
+      join(fixture, 'node_modules', '@gnolith', 'workshop', 'dist', 'cli.js'),
+      'serve',
+      '--config',
+      join(fixture, 'config.json'),
+    ],
+    { cwd: fixture, stdio: 'ignore' },
+  );
+  await waitForLive(origin, child);
+  const degradedAfterRestart = await fetch(`${origin}/health/ready`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(degradedAfterRestart.status, 503);
+  assert.equal((await degradedAfterRestart.json()).lexicalReady, true);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+  assert.equal(child.exitCode, null, 'bad semantic config restart-looped');
   await terminate(child);
   const ownInspection = JSON.parse(
     execFileSync(
@@ -1073,10 +1354,14 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ],
   );
   process.stdout.write(
-    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224' })}\n`,
+    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: 'e2d1e0f09e4dbad786d14cb4a9dd86dbe56a64d274e252bbbb1956b2c8933c85' })}\n`,
   );
 } finally {
   if (child?.exitCode === null) await terminate(child);
+  if (semanticMock)
+    await new Promise((resolvePromise, reject) =>
+      semanticMock.close((error) => (error ? reject(error) : resolvePromise())),
+    );
   await rm(fixture, {
     recursive: true,
     force: true,
@@ -1084,6 +1369,115 @@ export async function createWorkshopSemanticConfigurationDependencies(
     retryDelay: 100,
   });
   await rm(tarball, { force: true });
+}
+
+async function startSemanticMock() {
+  const points = new Map();
+  // The Node listener owns the returned promise through its response lifecycle.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
+  const server = createHttpServer(async (request, response) => {
+    try {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      const body = await readNodeBody(request);
+      if (url.pathname === '/v1/embeddings' && request.method === 'POST') {
+        assert.equal(
+          request.headers.authorization,
+          'Bearer packed-openai-secret',
+        );
+        const input = JSON.parse(body);
+        assert.equal(input.dimensions, 4);
+        assert.ok(Array.isArray(input.input));
+        return json(response, 200, {
+          data: input.input.map((_, index) => ({
+            index,
+            embedding: [1, 0, 0, 0],
+          })),
+          usage: { total_tokens: input.input.length },
+        });
+      }
+      const collection = '/collections/packed_vectors';
+      if (url.pathname.startsWith(collection)) {
+        assert.equal(request.headers['api-key'], 'packed-qdrant-secret');
+        if (url.pathname === collection && request.method === 'GET')
+          return json(response, 200, {
+            result: {
+              config: {
+                params: { vectors: { size: 4, distance: 'Cosine' } },
+              },
+            },
+          });
+        if (
+          url.pathname === `${collection}/points` &&
+          request.method === 'PUT'
+        ) {
+          for (const point of JSON.parse(body).points ?? [])
+            points.set(point.id, point);
+          return json(response, 200, { result: { status: 'completed' } });
+        }
+        if (
+          url.pathname === `${collection}/points/delete` &&
+          request.method === 'POST'
+        ) {
+          const deletion = JSON.parse(body);
+          if (Array.isArray(deletion.points))
+            for (const point of deletion.points) points.delete(point);
+          else points.clear();
+          return json(response, 200, { result: { status: 'completed' } });
+        }
+        if (
+          url.pathname === `${collection}/points/query` &&
+          request.method === 'POST'
+        )
+          return json(response, 200, {
+            result: {
+              points: [...points.values()]
+                .sort((left, right) =>
+                  left.payload?.sourceId === 'Q1'
+                    ? -1
+                    : right.payload?.sourceId === 'Q1'
+                      ? 1
+                      : String(left.id).localeCompare(String(right.id)),
+                )
+                .map((point) => ({
+                  id: point.id,
+                  score: point.payload?.sourceId === 'Q1' ? 2 : 1,
+                  payload: point.payload,
+                })),
+            },
+          });
+      }
+      return json(response, 404, { error: 'unexpected mock route' });
+    } catch (error) {
+      return json(response, 500, {
+        error: error instanceof Error ? error.message : 'mock failure',
+      });
+    }
+  });
+  await new Promise((resolvePromise, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolvePromise();
+    });
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return {
+    server,
+    origin: `http://127.0.0.1:${address.port}`,
+    points,
+  };
+}
+
+async function readNodeBody(request) {
+  let value = '';
+  for await (const chunk of request) value += String(chunk);
+  return value;
+}
+
+function json(response, status, value) {
+  response.writeHead(status, { 'content-type': 'application/json' });
+  response.end(JSON.stringify(value));
 }
 
 async function mcp(origin, token, id, method, params) {
@@ -1112,6 +1506,15 @@ async function successfulToolCall(origin, token, id, name, argumentsValue) {
   });
   assert.equal(response.result?.isError, false, JSON.stringify(response));
   return response.result.structuredContent;
+}
+
+function toolErrorCode(response) {
+  return (
+    response.error?.data?.code ??
+    response.result?.structuredContent?.code ??
+    (response.error?.code === -32001 ? 'forbidden' : null) ??
+    null
+  );
 }
 
 async function mcpHttpStatus(origin, token, id, name, argumentsValue) {
@@ -1218,6 +1621,7 @@ async function waitForLive(origin, processHandle) {
 }
 
 async function waitForReady(origin, token, processHandle) {
+  let lastBody = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (processHandle.exitCode !== null)
       throw new Error(`packed process exited ${processHandle.exitCode}`);
@@ -1226,9 +1630,16 @@ async function waitForReady(origin, token, processHandle) {
     });
     if (response.ok) return response.json();
     assert.equal(response.status, 503);
+    lastBody = await response.json();
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
-  throw new Error('packed process did not recover readiness');
+  const health = await mcp(origin, token, 999_999, 'tools/call', {
+    name: 'search_admin',
+    arguments: { action: 'health' },
+  });
+  throw new Error(
+    `packed process did not recover readiness: ${JSON.stringify({ readiness: lastBody, search: health })}`,
+  );
 }
 
 function canonicalize(value) {

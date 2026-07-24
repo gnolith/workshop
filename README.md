@@ -57,7 +57,12 @@ The input contains only declarative provider/vector identities and protected
 credential selector IDs. It never contains credential bytes. Configuration can
 be persisted while unavailable; `gnolith_status.semanticState.ready` becomes
 true only after the selected generation is actually ready, while lexical search
-remains available.
+remains available. `provider.endpoint` is the exact POST URL: an
+OpenAI-compatible endpoint ends in `/embeddings` (for example
+`https://provider.example/v1/embeddings`) and an Ollama-compatible endpoint
+ends in `/api/embed`. A configured but degraded semantic provider makes
+`/health/ready` return 503 without preventing the process from starting or
+serving lexical search.
 
 Verified Waystone assets should use the exported `/app` mount recommendation.
 The root, `/mcp`, `/health`, `/api`, and `/.well-known` namespaces cannot be

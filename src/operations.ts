@@ -48,6 +48,10 @@ export interface WorkshopStatusSnapshot {
     revision: number | null;
     fingerprint: string | null;
     ready: boolean;
+    diagnostic: {
+      code: 'materialization-pending' | 'provider-unavailable';
+      retryable: boolean;
+    } | null;
   };
   producers: {
     ready: boolean;

@@ -39,7 +39,11 @@ authorization-bootstrap transaction.
 Run `configure-semantics-v1 --config <path> --input <json-file>` after
 bootstrap and before `serve`. The configuration file contains selector IDs, not
 credential bytes. Readiness exposes the exact semantic revision, fingerprint,
-and ready state without weakening lexical search.
+and ready state without weakening lexical search. Provider endpoints are exact
+POST URLs (`.../embeddings` for OpenAI-compatible providers and `.../api/embed`
+for Ollama-compatible providers), not API base URLs. A persisted failed
+configuration degrades readiness but does not stop or restart-loop the
+Workshop service.
 
 For filesystem resource backup and restore, instantiate
 `createLocalFilesystemResourceBlobPortsV1({ root })` from

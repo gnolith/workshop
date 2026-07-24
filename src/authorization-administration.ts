@@ -26,6 +26,11 @@ interface PendingAdministration {
   createdAt: string;
 }
 
+type AuthorizationPolicyTarget =
+  | { kind: 'entity'; id: string }
+  | { kind: 'resource'; id: string }
+  | { kind: 'annotation'; id: string };
+
 export interface WorkshopAuthorizationAdministrationV1 {
   call(input: Input, context: OperationCallContext): Promise<unknown>;
   assertPrincipalActive(principal: AuthenticatedPrincipal): Promise<void>;
@@ -195,9 +200,7 @@ class WorkshopAuthorizationAdministration implements WorkshopAuthorizationAdmini
     input: Input,
     context: OperationCallContext,
   ): Promise<unknown> {
-    const target = object(input.target);
-    const kind = string(target.kind);
-    const id = string(target.id);
+    const { kind, id } = policyTarget(input.target);
     const policy =
       kind === 'entity'
         ? await this.options.db
@@ -580,10 +583,10 @@ async function commandFor(
     return { type: 'put-principal', principalId: string(binding.principalId) };
   }
   if (action === 'visibility-policy-set') {
-    const target = object(input.target);
+    const target = policyTarget(input.target);
     const visibility = input.visibility as never;
     const expectedRevision = integer(input.expectedTargetRevision);
-    switch (string(target.kind)) {
+    switch (target.kind) {
       case 'entity':
         return {
           type: 'set-entity-visibility',
@@ -684,8 +687,7 @@ function targetFor(
       id: `${url(input.issuer)}#${string(input.subject)}`,
     };
   if (action === 'visibility-policy-set') {
-    const value = object(input.target);
-    return { kind: string(value.kind), id: string(value.id) };
+    return policyTarget(input.target);
   }
   return { kind: 'principal', id: context.principal.principalId };
 }
@@ -750,16 +752,43 @@ function parseReceipt(value: string): Record<string, unknown> {
 
 function mapTaprootAdministrationError(error: unknown): never {
   const candidate = error as { name?: unknown; code?: unknown };
-  if (
-    candidate?.name === 'AuthorizationDeniedError' ||
-    candidate?.code === 'AUTHORIZATION_DENIED'
-  )
+  const name = typeof candidate?.name === 'string' ? candidate.name : '';
+  const code = typeof candidate?.code === 'string' ? candidate.code : '';
+  if (name === 'AuthorizationDeniedError' || code === 'AUTHORIZATION_DENIED')
     throw forbidden();
   if (
-    candidate?.name === 'RevisionConflictError' ||
-    candidate?.code === 'REVISION_CONFLICT'
+    name === 'RevisionConflictError' ||
+    code === 'REVISION_CONFLICT' ||
+    code === 'SEARCH_SOURCE_REPLAY_CONFLICT'
   )
     throw conflict();
+  if (
+    name === 'EntityNotFoundError' ||
+    name === 'PropertyNotFoundError' ||
+    code === 'ENTITY_NOT_FOUND' ||
+    code === 'PROPERTY_NOT_FOUND'
+  )
+    throw new WorkshopError(
+      'not_found',
+      'Authorization policy target was not found',
+      404,
+    );
+  if (
+    name === 'InvalidEntityError' ||
+    name === 'InvalidStatementError' ||
+    name === 'InvalidDatatypeError' ||
+    name === 'InvalidAuthorizationError' ||
+    name === 'TypeError' ||
+    code === 'INVALID_ENTITY' ||
+    code === 'INVALID_STATEMENT' ||
+    code === 'INVALID_DATATYPE' ||
+    code === 'INVALID_AUTHORIZATION'
+  )
+    throw new WorkshopError(
+      'validation_failed',
+      'Authorization policy target or visibility is invalid',
+      400,
+    );
   if (error instanceof WorkshopError) throw error;
   throw new WorkshopError(
     'internal_error',
@@ -775,6 +804,27 @@ function mapTaprootAdministrationError(error: unknown): never {
           ? candidate.code.slice(0, 128)
           : 'unknown',
     },
+  );
+}
+
+function policyTarget(value: unknown): AuthorizationPolicyTarget {
+  const target = object(value);
+  const kind = string(target.kind);
+  const id = string(target.id);
+  if (kind === 'entity') {
+    if (!/^[PQ][1-9][0-9]*$/u.test(id))
+      throw new WorkshopError(
+        'validation_failed',
+        'Authorization entity target is invalid',
+        400,
+      );
+    return { kind, id };
+  }
+  if (kind === 'resource' || kind === 'annotation') return { kind, id };
+  throw new WorkshopError(
+    'validation_failed',
+    'Authorization policy target kind is invalid',
+    400,
   );
 }
 

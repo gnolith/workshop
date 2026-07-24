@@ -34,6 +34,7 @@ const ready: WorkshopStatusSnapshot = {
     revision: 1,
     fingerprint: 'd'.repeat(64),
     ready: true,
+    diagnostic: null,
   },
   producers: {
     ready: true,
@@ -431,6 +432,94 @@ describe('executable listener and authentication', () => {
       expect(body).toMatchObject({
         lexicalReady: false,
       });
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it('starts with degraded semantics while keeping lexical service live and readiness closed', async () => {
+    const service = createWorkshopHttpService({
+      version: '0.5.0',
+      listener: { host: '127.0.0.1', port: 0, profile: 'test' },
+      authentication: {
+        profile: 'local-bearer-v1',
+        challenge: 'Bearer',
+        async authenticate() {
+          return {
+            profile: 'local-bearer-v1',
+            credentialId: 'credential:test',
+            installationId: 'installation:test',
+            principalId: 'principal:test',
+            activeWorkspaceId: 'workspace:test',
+            capabilities: ['read'],
+            authorizationRevision: 1,
+          };
+        },
+        protectedResourceMetadata: () => null,
+      },
+      producerBinding: {
+        binding: producerBinding,
+        expectation: producerExpectation,
+      },
+      operations: {
+        catalog: operationCatalog,
+        catalogDigest: CATALOG_DIGEST,
+        async call() {
+          return {
+            migrationReadiness: ready.migrations,
+            canonicalReady: true,
+            authorizationReady: true,
+            lexicalReady: true,
+            semanticState: {
+              state: 'degraded',
+              configured: true,
+              revision: 1,
+              fingerprint: 'd'.repeat(64),
+              ready: false,
+              diagnostic: {
+                code: 'provider-unavailable',
+                retryable: true,
+              },
+            },
+            producers: ready.producers,
+            blobReady: true,
+          } as never;
+        },
+      },
+      async preflight() {
+        return {
+          ...ready,
+          semantic: {
+            ...ready.semantic,
+            state: 'degraded',
+            ready: false,
+            diagnostic: {
+              code: 'provider-unavailable',
+              retryable: true,
+            },
+          },
+        };
+      },
+    });
+    const address = await service.start();
+    try {
+      expect(
+        (await fetch(`http://127.0.0.1:${address.port}/health/live`)).status,
+      ).toBe(200);
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/health/ready`,
+      );
+      await expect(response.json()).resolves.toMatchObject({
+        lexicalReady: true,
+        semanticState: {
+          ready: false,
+          diagnostic: {
+            code: 'provider-unavailable',
+            retryable: true,
+          },
+        },
+      });
+      expect(response.status).toBe(503);
     } finally {
       await service.stop();
     }

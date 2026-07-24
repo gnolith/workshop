@@ -18,7 +18,7 @@ try {
     'TAPROOT_TARBALL',
     resolve('..', 'taproot', 'gnolith-taproot-0.5.0.tgz'),
     process.env.TAPROOT_TARBALL_SHA256 ??
-      '322c54ce4c604c73b86935a33d1980a96b75ca3dd5fde0671fba70b9681ecc41',
+      'c2e35fec79a09c595928a5da1063f37bd96576262a85bd3a5876d191e82bd1f0',
   );
   const [packed] = JSON.parse(
     execFileSync(

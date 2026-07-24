@@ -17,6 +17,7 @@ import {
 import type {
   SearchMaterializationAdminGuardV1,
   SearchMaterializationRunOptionsV1,
+  SemanticSearchAdminV1,
 } from '@gnolith/taproot/search';
 import {
   D1QuadSource,
@@ -232,6 +233,12 @@ async function assembleExecutableDependencies(
     registrationContext,
     ...(input.semantic ? { semantic: input.semantic } : {}),
   });
+  const semanticConfiguration = {
+    db: input.db,
+    installationId: input.installationId,
+    semantic: search.semantic,
+    authorization: registrationContext,
+  };
   const materialization = serializeMaterializationRuns(search.materialization);
   const expectation: WorkshopProducerBindingExpectation = {
     installationId: input.installationId,
@@ -292,6 +299,7 @@ async function assembleExecutableDependencies(
       cursorCodec: input.taproot.authorizationCursorCodec,
       search: search.service,
       materialization,
+      semantic: search.semantic,
       ...(input.taproot.payloadStore
         ? { payloadStore: input.taproot.payloadStore }
         : {}),
@@ -353,6 +361,11 @@ async function assembleExecutableDependencies(
             maxJobs: 10,
             maxRebuildRoots: 10,
           });
+          await resumeSemanticLifecycle(
+            search.semantic,
+            liveRegistrationContext,
+            signal,
+          );
         },
         checkpoint(signal) {
           signal.throwIfAborted();
@@ -364,17 +377,32 @@ async function assembleExecutableDependencies(
       signal.throwIfAborted();
       return status();
     },
-    semanticConfiguration: {
-      db: input.db,
-      installationId: input.installationId,
-      semantic: search.semantic,
-      authorization: registrationContext,
-    },
+    semanticConfiguration,
     ...(input.assets ? { assets: input.assets } : {}),
     ...(input.dependencies ? { dependencies: input.dependencies } : {}),
     ownerHandles,
   };
   return Object.freeze(dependencies);
+}
+
+async function resumeSemanticLifecycle(
+  semantic: SemanticSearchAdminV1,
+  context: TaprootAuthorizationContext,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const status = await semantic.status(context);
+  if (
+    !status.configured ||
+    status.circuitOpen ||
+    !status.selectedConfigurationId
+  )
+    return;
+  for (const plan of status.plans) {
+    if (plan.state !== 'approved' && plan.state !== 'running') continue;
+    signal.throwIfAborted();
+    await semantic.resume(plan.planId, context, signal);
+  }
 }
 
 function serializeMaterializationRuns(
@@ -679,6 +707,8 @@ async function workshopLocalStatus(
     revision: number | null;
     fingerprint: string | null;
     ready: boolean;
+    circuitOpen: boolean;
+    failureCode: string | null;
   }>,
 ): Promise<WorkshopStatusSnapshot> {
   const [schema, state, searchHealth, persistedSemantic, semanticHealthValue] =
@@ -694,6 +724,7 @@ async function workshopLocalStatus(
   const authorizationReady =
     state.installationId === input.installationId &&
     state.authorizationRevision >= 1;
+  const semanticReady = semanticHealthValue.ready;
   return {
     baseIri: input.taproot.options.baseIri,
     migrations: {
@@ -708,7 +739,7 @@ async function workshopLocalStatus(
       searchHealth.status === 'healthy' &&
       searchHealth.activeAppliedWatermark >= searchHealth.sourceHighWatermark,
     semantic: {
-      state: semanticHealthValue.ready
+      state: semanticReady
         ? 'ready'
         : semanticHealthValue.configured || persistedSemantic.configured
           ? 'degraded'
@@ -718,7 +749,20 @@ async function workshopLocalStatus(
       revision: semanticHealthValue.revision ?? persistedSemantic.revision,
       fingerprint:
         semanticHealthValue.fingerprint ?? persistedSemantic.fingerprint,
-      ready: semanticHealthValue.ready,
+      ready: semanticReady,
+      diagnostic:
+        !semanticHealthValue.configured && !persistedSemantic.configured
+          ? null
+          : semanticReady
+            ? null
+            : {
+                code:
+                  semanticHealthValue.circuitOpen ||
+                  semanticHealthValue.failureCode !== null
+                    ? 'provider-unavailable'
+                    : 'materialization-pending',
+                retryable: true,
+              },
     },
     producers: {
       ready: true,

@@ -217,6 +217,7 @@ describe('architecture reset contract', () => {
               revision: 1,
               fingerprint: 'd'.repeat(64),
               ready: true,
+              diagnostic: null,
             },
             producers: {
               ready: true,

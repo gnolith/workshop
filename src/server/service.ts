@@ -307,11 +307,13 @@ function readinessFromStatus(value: unknown): boolean {
   const migration = status.migrationReadiness as
     Record<string, unknown> | undefined;
   const producers = status.producers as Record<string, unknown> | undefined;
+  const semantic = status.semanticState as Record<string, unknown> | undefined;
   return (
     migration?.ready === true &&
     status.canonicalReady === true &&
     status.authorizationReady === true &&
     status.lexicalReady === true &&
+    (semantic?.configured !== true || semantic.ready === true) &&
     producers?.ready === true &&
     status.blobReady === true
   );

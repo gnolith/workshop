@@ -298,6 +298,30 @@ describe('Workshop external search producers', () => {
       });
       await expect(
         admin({
+          ...visibilityInput,
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          expectedTargetRevision: 3,
+          idempotencyKey: 'visibility-worker-stale-target-v1',
+        }),
+      ).rejects.toMatchObject({ code: 'conflict', status: 409 });
+      await expect(
+        admin({
+          ...visibilityInput,
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          target: { kind: 'entity', id: 'Q999' },
+          idempotencyKey: 'visibility-worker-missing-target-v1',
+        }),
+      ).rejects.toMatchObject({ code: 'not_found', status: 404 });
+      await expect(
+        admin({
+          ...visibilityInput,
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          target: { kind: 'entity', id: 'Q0' },
+          idempotencyKey: 'visibility-worker-invalid-target-v1',
+        }),
+      ).rejects.toMatchObject({ code: 'validation_failed', status: 400 });
+      await expect(
+        admin({
           version: 1,
           action: 'effective-policy',
           target: { kind: 'entity', id: entity.entityId },
@@ -335,6 +359,17 @@ describe('Workshop external search producers', () => {
           { ...context, principal: workerPrincipal },
         ),
       ).resolves.toMatchObject({ entity: { id: entity.entityId } });
+      await expect(
+        operations.call(
+          'authorization_admin',
+          {
+            ...visibilityInput,
+            expectedPolicyRevision: workerPrincipal.authorizationRevision,
+            idempotencyKey: 'visibility-worker-unauthorized-v1',
+          },
+          { ...context, principal: workerPrincipal },
+        ),
+      ).rejects.toMatchObject({ code: 'forbidden', status: 403 });
 
       const workerToken = Buffer.from(
         Uint8Array.from({ length: 32 }, (_, index) => 255 - index),

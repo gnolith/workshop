@@ -156,6 +156,32 @@
               },
               "ready": {
                 "type": "boolean"
+              },
+              "diagnostic": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "enum": [
+                          "materialization-pending",
+                          "provider-unavailable"
+                        ]
+                      },
+                      "retryable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "retryable"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -163,7 +189,8 @@
               "configured",
               "revision",
               "fingerprint",
-              "ready"
+              "ready",
+              "diagnostic"
             ],
             "additionalProperties": false
           },
@@ -1271,7 +1298,8 @@
                           "endpoint": {
                             "type": "string",
                             "pattern": "^https?://",
-                            "maxLength": 4096
+                            "maxLength": 4096,
+                            "description": "Exact embeddings POST URL: openai-compatible ends in /embeddings and ollama-compatible ends in /api/embed."
                           },
                           "model": {
                             "type": "string",
@@ -6735,7 +6763,7 @@
       }
     }
   ],
-  "catalogDigest": "7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224",
+  "catalogDigest": "e2d1e0f09e4dbad786d14cb4a9dd86dbe56a64d274e252bbbb1956b2c8933c85",
   "legacyNames": {
     "add_alias": "mutate_entity",
     "add_reference": "mutate_entity",

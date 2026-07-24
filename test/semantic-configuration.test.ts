@@ -124,6 +124,70 @@ describe('Workshop semantic configuration control plane', () => {
     ).rejects.toMatchObject({ code: 'forbidden', status: 403 });
     expect(semantic.configure).not.toHaveBeenCalled();
   });
+
+  it('passes the exact provider POST endpoint through unchanged', async () => {
+    const fixture = await createTestContext();
+    cleanups.push(fixture.dispose);
+    const configured = vi.fn(async () => undefined);
+    const selected = vi.fn(async () => undefined);
+    const semantic = {
+      configure: configured,
+      select: selected,
+      async status() {
+        return {
+          configured: true,
+          configurationCount: 1,
+          state: 'building',
+          revision: 1,
+          fingerprint: 'a'.repeat(64),
+          ready: false,
+          selectedConfigurationId: 'semantic-openai-v1',
+          selectedReady: false,
+          circuitOpen: false,
+          plans: [],
+        };
+      },
+    } as unknown as SemanticSearchAdminV1;
+    const input: ConfigureWorkshopSemanticsV1Input = {
+      ...configuration(),
+      idempotencyKey: 'semantic-openai-exact-v1',
+      configuration: {
+        ...configuration().configuration,
+        id: 'semantic-openai-v1',
+        name: 'Exact OpenAI endpoint',
+        provider: {
+          ...configuration().configuration.provider,
+          kind: 'openai-compatible',
+          endpoint: 'http://127.0.0.1:4111/v1/embeddings',
+          model: 'text-embedding-test',
+        },
+      },
+    };
+    const dependencies = {
+      db: fixture.db,
+      installationId: TEST_AUTHORIZATION.installationId,
+      semantic,
+      authorization: TEST_AUTHORIZATION,
+    };
+    await configureWorkshopSemanticsV1(input, dependencies);
+    expect(configured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: expect.objectContaining({
+          endpoint: 'http://127.0.0.1:4111/v1/embeddings',
+        }),
+      }),
+      expect.objectContaining({
+        expectedRevision: 0,
+        idempotencyKey: 'semantic-openai-exact-v1',
+      }),
+      TEST_AUTHORIZATION,
+    );
+
+    expect(selected).toHaveBeenCalledWith(
+      'semantic-openai-v1',
+      TEST_AUTHORIZATION,
+    );
+  });
 });
 
 function configuration(): ConfigureWorkshopSemanticsV1Input {
@@ -137,7 +201,7 @@ function configuration(): ConfigureWorkshopSemanticsV1Input {
       name: 'Local Ollama with SQLite',
       provider: {
         kind: 'ollama-compatible',
-        endpoint: 'http://127.0.0.1:11434/',
+        endpoint: 'http://127.0.0.1:11434/api/embed',
         model: 'nomic-embed-text',
         dimensions: 768,
         metric: 'cosine',
