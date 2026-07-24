@@ -40,4 +40,33 @@ declare module '@gnolith/diamond' {
         { mode: 'empty' } | { mode: 'exact-adopt'; confirmExactSchema: true },
     ): Promise<void>;
   }
+
+  export interface MigrationAssemblyAuthority {
+    readonly format: 'diamond-migration-assembly-authority-v1';
+  }
+
+  export function createMigrationLedgerBackupV1(
+    db: unknown,
+    assemblyAuthority: MigrationAssemblyAuthority,
+  ): MigrationLedgerBackup;
+
+  export function registerMigrationLedgerOwnerV1(options: {
+    db: unknown;
+    installationId: string;
+    namespace: string;
+    migrations: readonly { id: string; statements: readonly string[] }[];
+    assemblyAuthority: MigrationAssemblyAuthority;
+  }): Promise<MigrationLedgerOwnerHandle>;
+
+  export class D1QuadSource {
+    constructor(db: unknown, options?: unknown);
+    match(
+      subject?: { termType?: string; value?: string } | null,
+      predicate?: unknown,
+      object?: unknown,
+      graph?: unknown,
+    ): {
+      pipe(destination: unknown): unknown;
+    };
+  }
 }

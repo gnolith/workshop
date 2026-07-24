@@ -32,6 +32,13 @@ export interface WorkshopNamespacedMigration {
   statements: readonly string[];
 }
 
+export const workshopNamespacedMigrationsV1: readonly WorkshopNamespacedMigration[] =
+  Object.freeze(
+    workshopMigrations.map(({ id, sql }) =>
+      Object.freeze({ id, statements: Object.freeze(splitStatements(sql)) }),
+    ),
+  );
+
 export interface WorkshopAppliedMigration {
   namespace: string;
   id: string;

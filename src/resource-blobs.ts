@@ -16,6 +16,7 @@ import type {
   ResourceBlobDescriptor,
   ResourceBlobRestorePort,
 } from '@gnolith/taproot/backup';
+import type { PortableResourcePayloadStoreV1 } from '@gnolith/taproot';
 import { WorkshopError } from './protocol/errors.js';
 
 const MANIFEST_FORMAT = 'workshop-resource-blob-store-v1';
@@ -31,6 +32,7 @@ export interface LocalFilesystemResourceBlobOptionsV1 {
 export interface LocalFilesystemResourceBlobPortsV1 {
   readonly backup: ResourceBlobBackupPort;
   readonly restore: ResourceBlobRestorePort;
+  readonly payloadStore: PortableResourcePayloadStoreV1;
 }
 
 interface Stage {
@@ -291,7 +293,43 @@ export async function createLocalFilesystemResourceBlobPortsV1(
     },
   };
 
-  return { backup, restore };
+  const payloadStore: PortableResourcePayloadStoreV1 = {
+    kind: 'taproot-resource-payload-store-v1',
+    async load(reference, signal) {
+      assertReferenceId(reference.referenceId);
+      boundedInteger(reference.byteLength, 0, maxBlobBytes, 'byteLength');
+      signal?.throwIfAborted();
+      const descriptor = (await readManifest()).get(reference.referenceId);
+      if (!descriptor)
+        throw new WorkshopError('not_found', 'Resource blob not found', 404);
+      if (descriptor.byteLength !== reference.byteLength) throw invalidBlob();
+      const path = objectPath(objects, descriptor.sha256);
+      const stat = await lstat(path).catch((error: unknown) => {
+        if (isMissing(error))
+          throw new WorkshopError(
+            'dependency_unavailable',
+            'Resource blob payload is unavailable',
+            503,
+          );
+        throw error;
+      });
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size !== descriptor.byteLength
+      )
+        throw unsafeStore();
+      const bytes = await readFile(path, signal ? { signal } : undefined);
+      if (
+        bytes.byteLength !== descriptor.byteLength ||
+        createHash('sha256').update(bytes).digest('hex') !== descriptor.sha256
+      )
+        throw unsafeStore();
+      return new Uint8Array(bytes);
+    },
+  };
+
+  return { backup, restore, payloadStore };
 }
 
 function resolveRoot(value: string): string {

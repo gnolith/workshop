@@ -47,6 +47,20 @@ describe('local filesystem ResourceBlob ports', () => {
     });
     const opened = await ports.backup.open(descriptor.referenceId);
     expect(await consume(opened)).toEqual(bytes);
+    await expect(
+      ports.payloadStore.load({
+        kind: 'blob-reference',
+        referenceId: descriptor.referenceId,
+        byteLength: descriptor.byteLength,
+      }),
+    ).resolves.toEqual(bytes);
+    await expect(
+      ports.payloadStore.load({
+        kind: 'blob-reference',
+        referenceId: descriptor.referenceId,
+        byteLength: descriptor.byteLength + 1,
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 
   it('supports canonical rebinds without treating reference IDs as paths', async () => {

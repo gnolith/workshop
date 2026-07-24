@@ -113,6 +113,16 @@ export async function createWorkshopLocalExecutableAdapterV1(
   return Object.freeze(adapter);
 }
 
+export {
+  createWorkshopAuthorizationAuthorityV1,
+  createWorkshopCursorCodecV1,
+  createWorkshopDiamondSparqlPortV1,
+  createWorkshopLocalExecutableAdapterFromPrimitivesV1,
+  createWorkshopLocalExecutableDependenciesV1,
+  type WorkshopCursorSecretsV1,
+  type WorkshopLocalAssemblyPrimitivesV1,
+} from './local-dependencies.js';
+
 function validateDependencies(
   dependencies: WorkshopLocalExecutableDependenciesV1,
 ): void {

@@ -21,6 +21,7 @@
     "src/operations.ts",
     "src/executable.ts",
     "src/local-adapter.ts",
+    "src/local-dependencies.ts",
     "src/cli.ts",
     "src/generated/operations.ts"
   ],

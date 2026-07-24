@@ -45,100 +45,99 @@ try {
   await writeFile(
     join(fixture, 'adapter.mjs'),
     `
-import { createOperationRuntime } from '@gnolith/workshop';
-import { createWorkshopLocalExecutableAdapterV1 } from '@gnolith/workshop/local-adapter';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 import {
-  bindWorkshopProducerHandles,
-  createAuthenticationVerifier,
-  digestLocalBearerToken,
-} from '@gnolith/workshop/server';
+  createWorkshopLocalExecutableAdapterFromPrimitivesV1,
+} from '@gnolith/workshop/local-adapter';
+import {
+  applyWorkshopMigrations,
+} from '@gnolith/workshop/migrations';
+import {
+  createLocalFilesystemResourceBlobPortsV1,
+} from '@gnolith/workshop/backup';
+import {
+  createMigrationAssemblyAuthorityV1,
+  migrateDiamondStore,
+} from '@gnolith/diamond';
+import { NodeSqliteDatabase } from '@gnolith/diamond/node-sqlite';
+import {
+  createAuthorizationCursorCodec,
+  createTaprootHostWriteCapability,
+  initializeTaproot,
+} from '@gnolith/taproot';
 
-assertFactory(createWorkshopLocalExecutableAdapterV1);
+assertFactory(createWorkshopLocalExecutableAdapterFromPrimitivesV1);
 function assertFactory(value) {
   if (typeof value !== 'function') throw new Error('packed local adapter factory is unavailable');
 }
 
-const bytes = Uint8Array.from({ length: 32 }, (_, index) => index);
-const digest = await digestLocalBearerToken(bytes);
-const expectation = {
-  installationId: 'installation:packed',
-  connectionId: 'connection:packed',
+const token = Buffer.from(
+  Uint8Array.from({ length: 32 }, (_, index) => index),
+).toString('base64url');
+const installationId = 'installation:packed';
+const baseIri = 'https://packed.invalid/';
+const db = new NodeSqliteDatabase(
+  fileURLToPath(new URL('./shared.sqlite', import.meta.url)),
+);
+await migrateDiamondStore(db);
+await initializeTaproot(db, { baseIri });
+await applyWorkshopMigrations(db);
+const hostKey = await crypto.subtle.generateKey(
+  { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+);
+const hostAuthority = createTaprootHostWriteCapability(
+  db, { baseIri }, hostKey,
+);
+const taprootCursorKey = await crypto.subtle.generateKey(
+  { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+);
+const workshopCursorKey = await crypto.subtle.generateKey(
+  { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+);
+const workshopDigestKey = await crypto.subtle.generateKey(
+  { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+);
+const blobs = await createLocalFilesystemResourceBlobPortsV1({
+  root: fileURLToPath(new URL('./blobs', import.meta.url)),
+});
+const adapter = await createWorkshopLocalExecutableAdapterFromPrimitivesV1({
+  kind: 'workshop-local-assembly-primitives-v1',
+  version: '0.5.0',
+  db,
+  installationId,
   registrationFingerprint: 'd'.repeat(64),
-};
-const binding = bindWorkshopProducerHandles(expectation, Object.fromEntries(
-  ['task', 'memory', 'prompt'].map((kind) => [kind, {
-    owner: '@gnolith/workshop',
-    ...expectation,
-    handle: Object.freeze({ opaque: crypto.randomUUID() }),
-  }]),
-));
-const principal = {
-  installationId: expectation.installationId,
-  principalId: 'principal:packed',
-  activeWorkspaceId: 'workspace:packed',
-  capabilities: ['read'],
-  authorizationRevision: 1,
-  credentialId: 'credential:packed',
-};
-const status = {
-  baseIri: 'https://packed.invalid/',
-  migrations: { namespace: '@gnolith/workshop', version: 9, ready: true },
-  compatibility: { diamond: true, taproot: true },
-  canonicalReady: true,
-  authorizationReady: true,
-  lexicalReady: true,
-  semantic: { state: 'unconfigured', configured: false },
-  producers: {
-    ready: true,
-    fingerprint: expectation.registrationFingerprint,
-    kinds: ['task', 'memory', 'prompt'],
+  taproot: {
+    options: { baseIri },
+    hostAuthority,
+    authorizationCursorCodec: createAuthorizationCursorCodec(taprootCursorKey),
+    registrationPrincipal: {
+      principalId: 'principal:packed',
+      activeWorkspaceId: 'workspace:packed',
+    },
+    payloadStore: blobs.payloadStore,
   },
-  blobReady: true,
-};
-export async function createWorkshopExecutable() {
-  const authentication = createAuthenticationVerifier({
-    profile: 'local-bearer-v1',
-    credentials: {
-      async findByDigest(candidate) {
-        return candidate === digest ? {
-          profile: 'local-bearer-v1',
-          credentialId: principal.credentialId,
-          tokenDigest: digest,
-          installationId: principal.installationId,
-          principalId: principal.principalId,
-          activeWorkspaceId: principal.activeWorkspaceId,
-          capabilities: principal.capabilities,
-          authorizationRevision: principal.authorizationRevision,
-          disabled: false,
-        } : null;
-      },
-    },
-    authorization: { async recheck() { return principal; } },
-  });
-  const operations = createOperationRuntime({
-    version: '0.5.0',
-    taproot: {
-      async call() { return {}; },
-      async createScopedSparqlView() { return {}; },
-      async recheckPrincipal() { return principal; },
-      async status() { return status; },
-    },
-    diamond: {
-      async validate() { return {}; },
-      async query() { return {}; },
-    },
-    workshop: { async call() { return {}; } },
-  });
-  return {
-    version: '0.5.0',
-    authentication,
-    operations,
-    producerBinding: { binding, expectation },
-    async preflight() { return status; },
-  };
+  cursor: {
+    generation: 'packed-generation-v1',
+    encryptionKey: workshopCursorKey,
+    digestKey: workshopDigestKey,
+  },
+  migrationAssemblyAuthority:
+    createMigrationAssemblyAuthorityV1(db, installationId),
+  dependencies: [{ close: () => db.close() }],
+});
+export async function createWorkshopExecutable(config, protectedReader) {
+  return adapter.createWorkshopExecutable(config, protectedReader);
+}
+export async function createWorkshopBootstrapDependencies(
+  config, protectedReader,
+) {
+  return adapter.createWorkshopBootstrapDependencies(config, protectedReader);
 }
 `,
   );
+  const credentialPath = join(fixture, 'credential.txt');
+  writeFileSync(credentialPath, token);
   await writeFile(
     join(fixture, 'config.json'),
     JSON.stringify({
@@ -151,6 +150,31 @@ export async function createWorkshopExecutable() {
       adapterModule: './adapter.mjs',
     }),
   );
+  const bootstrap = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        join(fixture, 'node_modules', '@gnolith', 'workshop', 'dist', 'cli.js'),
+        'bootstrap-v1',
+        '--config',
+        join(fixture, 'config.json'),
+        '--installation-id',
+        'installation:packed',
+        '--base-iri',
+        'https://packed.invalid/',
+        '--principal',
+        'principal:packed',
+        '--workspace',
+        'workspace:packed',
+        '--credential-file',
+        credentialPath,
+        '--idempotency-key',
+        'packed-owner-v1',
+      ],
+      { cwd: fixture, encoding: 'utf8' },
+    ),
+  );
+  assert.equal(bootstrap.installationId, 'installation:packed');
   child = spawn(
     process.execPath,
     [
@@ -183,6 +207,14 @@ export async function createWorkshopExecutable() {
   const body = await initialize.json();
   assert.equal(body.result.serverInfo.name, 'gnolith');
   assert.equal(body.result.serverInfo.version, '0.5.0');
+  const tools = await mcp(origin, token, 2, 'tools/list', {});
+  assert.equal(tools.result.tools.length, 51);
+  const status = await mcp(origin, token, 3, 'tools/call', {
+    name: 'gnolith_status',
+    arguments: {},
+  });
+  assert.equal(status.result?.isError, false, JSON.stringify(status));
+  assert.equal(status.result.structuredContent.blobReady, true);
   await terminate(child);
   process.stdout.write(
     `${JSON.stringify({ packedProcess: 'ok', catalogDigest: '577cc1de501b0ae3556eb1d32e7dd516c70a09c5b6226d671cec312068fba3dd' })}\n`,
@@ -191,6 +223,25 @@ export async function createWorkshopExecutable() {
   if (child?.exitCode === null) await terminate(child);
   await rm(fixture, { recursive: true, force: true });
   await rm(tarball, { force: true });
+}
+
+async function mcp(origin, token, id, method, params) {
+  return (
+    await fetch(`${origin}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method,
+        params,
+      }),
+    })
+  ).json();
 }
 
 async function terminate(processHandle) {
