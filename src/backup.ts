@@ -580,8 +580,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function invalid(message: string): WorkshopError {
-  return new WorkshopError('validation_failed', message, 400);
+function invalid(
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): WorkshopError {
+  return new WorkshopError('validation_failed', message, 400, details);
 }
 
 function validBinding(value: unknown): value is string {
@@ -651,6 +654,11 @@ function normalizeOwnedState(
       if (collisions.some((value) => value !== canonical))
         throw invalid(
           `Workshop owner state contains inconsistent duplicate ${table} records`,
+          {
+            backupReason: 'inconsistent-logical-duplicate',
+            table,
+            logicalKeyCount: keys.length,
+          },
         );
       if (collisions.length > 0) {
         for (const key of keys) seen.set(key, canonical);

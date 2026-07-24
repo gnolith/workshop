@@ -263,7 +263,7 @@ await administer({
   principalId: 'principal:backup-fixture',
   workspaceId,
 });
-for (const capability of ['read', 'search:admin']) {
+for (const capability of ['read', 'admin', 'search:admin']) {
   await administer({
     action: 'workspace-grant-add',
     idempotencyKey: `backup-fixture-grant-${capability}-v1`,
@@ -275,6 +275,7 @@ for (const capability of ['read', 'search:admin']) {
 const delegatedBytes = Buffer.from(
   Uint8Array.from({ length: 32 }, (_, index) => index + 31),
 );
+const delegatedToken = delegatedBytes.toString('base64url');
 const delegatedDigest = createHash('sha256')
   .update(Buffer.from('gnolith-local-bearer-v1\0', 'utf8'))
   .update(delegatedBytes)
@@ -304,6 +305,9 @@ process.stdout.write(
   `${JSON.stringify({
     format: 'gnolith-workshop-public-backup-fixture-v1',
     taskId,
+    promptId: prompt.id,
+    completionInput,
+    delegatedToken,
     catalogDigest:
       '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224',
   })}\n`,

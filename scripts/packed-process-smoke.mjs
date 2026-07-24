@@ -9,6 +9,7 @@ import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers';
+import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
 const packed = JSON.parse(
@@ -57,6 +58,7 @@ import {
   applyWorkshopMigrations,
 } from '@gnolith/workshop/migrations';
 import {
+  createWorkshopBackupApi,
   createLocalFilesystemResourceBlobPortsV1,
 } from '@gnolith/workshop/backup';
 import {
@@ -148,6 +150,30 @@ const adapter = await createWorkshopLocalExecutableAdapterFromPrimitivesV1({
   },
   dependencies: [{ close: () => db.close() }],
 });
+export async function inspectOwnWorkshopState() {
+  const state = await adapter.ownerHandles.owner.exportOwnedState({
+    installationId,
+    signal: new AbortController().signal,
+  });
+  const roundTrippedState = JSON.parse(JSON.stringify(state));
+  const ownerInspection = await adapter.ownerHandles.owner.inspectOwnedState({
+    state: roundTrippedState,
+    signal: new AbortController().signal,
+  });
+  const backup = createWorkshopBackupApi({
+    owner: adapter.ownerHandles.owner,
+    ledger: adapter.ownerHandles.ledger,
+    schemaVersion: 11,
+  });
+  const document = await backup.exportBackup(installationId);
+  const fullInspection = await backup.inspectBackup(
+    JSON.parse(JSON.stringify(document)),
+  );
+  return { ownerInspection, fullInspection };
+}
+export async function closeFixtureDatabase() {
+  await db.close();
+}
 export async function createWorkshopExecutable(config, protectedReader) {
   return adapter.createWorkshopExecutable(config, protectedReader);
 }
@@ -370,7 +396,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
   await successfulToolCall(origin, delegatedToken, 107, 'authorization_admin', {
     version: 1,
     action: 'effective-policy',
-    target: { kind: 'entity', id: 'Q1' },
+    target: { kind: 'entity', id: 'Q900' },
   });
   const delegatedGrant = await successfulToolCall(
     origin,
@@ -427,7 +453,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
       idempotencyKey: 'packed-restart-item-v1',
       authoredText: 'Create an item immediately before a clean restart.',
       data: {
-        id: 'Q1',
+        id: 'Q900',
         labels: {
           en: { language: 'en', value: 'Packed restart item' },
         },
@@ -452,7 +478,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
   const identicalCalls = await Promise.all(
     ['a', 'b'].map((suffix, index) =>
       successfulToolCall(origin, token, 118 + index, 'mutate_entity', {
-        entityId: 'Q1',
+        entityId: 'Q900',
         expectedRevision: 1,
         idempotencyKey: `packed-identical-label-${suffix}`,
         mutations: [
@@ -511,7 +537,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
       122 + index,
       'mutate_entity',
       {
-        entityId: 'Q1',
+        entityId: 'Q900',
         expectedRevision: entityRevision,
         idempotencyKey: `packed-changed-label-${index + 2}`,
         mutations: [
@@ -535,7 +561,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
     action: 'visibility-policy-set',
     expectedPolicyRevision: policyRevision,
     idempotencyKey: 'packed-q1-visibility-v1',
-    target: { kind: 'entity', id: 'Q1' },
+    target: { kind: 'entity', id: 'Q900' },
     expectedTargetRevision: 3,
     visibility: {
       version: 1,
@@ -629,7 +655,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
       idempotencyKey: 'packed-restart-item-v2',
       authoredText: 'Create a second item to prove restart catch-up.',
       data: {
-        id: 'Q2',
+        id: 'Q901',
         labels: {
           en: { language: 'en', value: 'Packed restart item two' },
         },
@@ -768,15 +794,36 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   const item = await mcp(origin, token, 9, 'tools/call', {
     name: 'get_entity',
-    arguments: { entityId: 'Q1' },
+    arguments: { entityId: 'Q900' },
   });
   assert.equal(item.result?.isError, false, JSON.stringify(item));
-  assert.match(JSON.stringify(item.result.structuredContent), /"id":"Q1"/u);
+  assert.match(JSON.stringify(item.result.structuredContent), /"id":"Q900"/u);
   assert.match(
     JSON.stringify(item.result.structuredContent),
     /Packed restart item/u,
   );
+  const populated = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        join(root, 'scripts', 'populate-public-backup-fixture.mjs'),
+        origin,
+        token,
+      ],
+      { cwd: root, encoding: 'utf8' },
+    ),
+  );
+  assert.equal(populated.format, 'gnolith-workshop-public-backup-fixture-v1');
   await terminate(child);
+  const adapterModule = await import(
+    `${pathToFileURL(join(fixture, 'adapter.mjs')).href}?inspect=${Date.now()}`
+  );
+  const ownInspection = await adapterModule.inspectOwnWorkshopState();
+  assert.ok(ownInspection.ownerInspection.taskCount >= 1);
+  assert.ok(ownInspection.ownerInspection.memoryCount >= 1);
+  assert.ok(ownInspection.ownerInspection.promptCount >= 1);
+  assert.equal(ownInspection.fullInspection.valid, true);
+  await adapterModule.closeFixtureDatabase();
   process.stdout.write(
     `${JSON.stringify({ packedProcess: 'ok', catalogDigest: '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224' })}\n`,
   );
