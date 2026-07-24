@@ -108,7 +108,14 @@ interface WorkshopOwnedStateV1 {
 const WORKSHOP_BACKUP_QUERIES = [
   ['workshop_onboarding_runs', 'SELECT * FROM workshop_onboarding_runs'],
   ['workshop_onboarding_steps', 'SELECT * FROM workshop_onboarding_steps'],
-  ['workshop_tasks', 'SELECT * FROM workshop_tasks WHERE installation_id = ?'],
+  [
+    'workshop_tasks',
+    `SELECT workshop_tasks.*,
+            CASE WHEN idempotency_key IS NULL THEN NULL
+                 ELSE hex(idempotency_key) END
+              AS workshop_backup_idempotency_key_hex
+       FROM workshop_tasks WHERE installation_id = ?`,
+  ],
   [
     'workshop_task_revisions',
     `SELECT revisions.* FROM workshop_task_revisions revisions
@@ -117,7 +124,11 @@ const WORKSHOP_BACKUP_QUERIES = [
   ],
   [
     'workshop_memories',
-    'SELECT * FROM workshop_memories WHERE installation_id = ?',
+    `SELECT workshop_memories.*,
+            CASE WHEN idempotency_key IS NULL THEN NULL
+                 ELSE hex(idempotency_key) END
+              AS workshop_backup_idempotency_key_hex
+       FROM workshop_memories WHERE installation_id = ?`,
   ],
   [
     'workshop_memory_revisions',
@@ -316,7 +327,9 @@ export function createWorkshopOwnerHandlesV1(
         const result = await (
           sql.includes('?') ? statement.bind(installationId) : statement
         ).all<Record<string, unknown>>();
-        tables[table] = result.results.map((row) => ({ ...row }));
+        tables[table] = result.results.map((row) =>
+          decodeBackupOpaqueText(table, row),
+        );
       }
       return {
         format: 'gnolith-workshop-owned-state-v1',
@@ -646,30 +659,84 @@ function normalizeOwnedState(
     for (const row of rows) {
       const canonical = canonicalize(row);
       const keys = uniqueKeys
-        .map((columns) => logicalKey(table, columns, row))
-        .filter((key): key is string => key !== null);
+        .map((columns) => ({
+          columns,
+          key: logicalKey(table, columns, row),
+        }))
+        .filter(
+          (
+            value,
+          ): value is {
+            columns: readonly string[];
+            key: string;
+          } => value.key !== null,
+        );
       const collisions = keys
-        .map((key) => seen.get(key))
-        .filter((value): value is string => value !== undefined);
-      if (collisions.some((value) => value !== canonical))
+        .map(({ columns, key }) => ({
+          canonical: seen.get(key),
+          columns,
+        }))
+        .filter(
+          (
+            value,
+          ): value is {
+            canonical: string;
+            columns: readonly string[];
+          } => value.canonical !== undefined,
+        );
+      if (collisions.some((value) => value.canonical !== canonical))
         throw invalid(
           `Workshop owner state contains inconsistent duplicate ${table} records`,
           {
             backupReason: 'inconsistent-logical-duplicate',
             table,
             logicalKeyCount: keys.length,
+            collidingUniqueKeys: collisions.map(({ columns }) =>
+              columns.join('+'),
+            ),
           },
         );
       if (collisions.length > 0) {
-        for (const key of keys) seen.set(key, canonical);
+        for (const { key } of keys) seen.set(key, canonical);
         continue;
       }
-      for (const key of keys) seen.set(key, canonical);
+      for (const { key } of keys) seen.set(key, canonical);
       normalized.push({ ...row });
     }
     tables[table] = normalized;
   }
   return { ...state, tables };
+}
+
+function decodeBackupOpaqueText(
+  table: string,
+  row: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (table !== 'workshop_tasks' && table !== 'workshop_memories')
+    return { ...row };
+  const encoded = row.workshop_backup_idempotency_key_hex;
+  if (
+    encoded !== null &&
+    (typeof encoded !== 'string' ||
+      encoded.length % 2 !== 0 ||
+      !/^[0-9A-F]*$/u.test(encoded))
+  )
+    throw invalid('Workshop owner state contains invalid opaque text');
+  const decoded = { ...row };
+  delete decoded.workshop_backup_idempotency_key_hex;
+  decoded.idempotency_key = encoded === null ? null : decodeUtf8Hex(encoded);
+  return decoded;
+}
+
+function decodeUtf8Hex(value: string): string {
+  const bytes = new Uint8Array(value.length / 2);
+  for (let index = 0; index < bytes.length; index += 1)
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw invalid('Workshop owner state contains invalid opaque UTF-8 text');
+  }
 }
 
 function logicalKey(

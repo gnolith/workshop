@@ -44,7 +44,7 @@ describe('Workshop owner backup handle factory', () => {
         )
         .bind(
           'backup-task',
-          'installation:backup-owner\u0000workspace:owner\u0000principal:owner\u0000create-once',
+          `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-once`,
           'Back up this task',
           'Restore it safely',
           installationId,
@@ -59,6 +59,32 @@ describe('Workshop owner backup handle factory', () => {
           'completed exactly once',
           '2026-07-23T12:00:00.000Z',
           '2026-07-23T12:05:00.000Z',
+        )
+        .run();
+      await source.db
+        .prepare(
+          `INSERT INTO workshop_tasks (
+             id, idempotency_key, description, prompt, context_queries, memory_slugs, claimed,
+             installation_id, owner_principal_id, workspace_id,
+             visibility_scope, authorization_revision, title, objective,
+             constraints_json, acceptance_criteria_json, relationships_json,
+             outcome_kind, language, attribution_json, policy_revision,
+             revision, completed_at, result, created_at, updated_at
+           )
+           SELECT ?, ?, description, prompt, context_queries, memory_slugs, claimed,
+                  installation_id, owner_principal_id, workspace_id,
+                  visibility_scope, authorization_revision, ?, objective,
+                  constraints_json, acceptance_criteria_json, relationships_json,
+                  outcome_kind, language, attribution_json, policy_revision,
+                  revision, completed_at, ?, created_at, updated_at
+             FROM workshop_tasks WHERE id = ?`,
+        )
+        .bind(
+          'backup-task-2',
+          `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-twice`,
+          'Back up another task',
+          'second task completed exactly once',
+          'backup-task',
         )
         .run();
       await source.db.batch([
@@ -105,6 +131,28 @@ describe('Workshop owner backup handle factory', () => {
             '2026-07-23T12:05:00.000Z',
             'd'.repeat(64),
           ),
+        source.db
+          .prepare(
+            `INSERT INTO workshop_task_revisions (
+               task_id, revision, snapshot_json, actor_principal_id, event_id, created_at
+             ) VALUES (?, 1, ?, ?, ?, ?), (?, 2, ?, ?, ?, ?)`,
+          )
+          .bind(
+            'backup-task-2',
+            JSON.stringify({ id: 'backup-task-2', revision: 1 }),
+            'principal:owner',
+            'event:backup-created-2',
+            '2026-07-23T12:00:00.000Z',
+            'backup-task-2',
+            JSON.stringify({
+              id: 'backup-task-2',
+              revision: 2,
+              result: 'second task completed exactly once',
+            }),
+            'principal:owner',
+            'event:backup-completed-2',
+            '2026-07-23T12:05:00.000Z',
+          ),
       ]);
 
       const sourceApi = createWorkshopBackupApi({
@@ -118,8 +166,19 @@ describe('Workshop owner backup handle factory', () => {
       await expect(sourceApi.inspectBackup(backup)).resolves.toMatchObject({
         valid: true,
         installationId,
-        legacy: { taskCount: 1 },
+        legacy: { taskCount: 2 },
       });
+      const workshopSection = backup.sections.workshop as {
+        tables: Record<string, Array<Record<string, unknown>>>;
+      };
+      expect(
+        workshopSection.tables
+          .workshop_tasks!.map((row) => row.idempotency_key)
+          .sort(),
+      ).toEqual([
+        `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-once`,
+        `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-twice`,
+      ]);
       const tampered = structuredClone(backup) as {
         sections: {
           workshop: {
@@ -157,7 +216,7 @@ describe('Workshop owner backup handle factory', () => {
         )
         .bind(
           'dry-run-collision',
-          'installation:backup-owner\u0000workspace:owner\u0000principal:owner\u0000create-once',
+          `${installationId}\u0000workspace:owner\u0000principal:owner\u0000dry-run`,
           'Dry-run placeholder',
           'Must be replaced',
           installationId,
@@ -174,11 +233,11 @@ describe('Workshop owner backup handle factory', () => {
         .run();
       await expect(destinationApi.importBackup(backup)).resolves.toMatchObject({
         valid: true,
-        legacy: { taskCount: 1 },
+        legacy: { taskCount: 2 },
       });
       await expect(destinationApi.importBackup(backup)).resolves.toMatchObject({
         valid: true,
-        legacy: { taskCount: 1 },
+        legacy: { taskCount: 2 },
       });
       await expect(
         destination.db
@@ -194,8 +253,20 @@ describe('Workshop owner backup handle factory', () => {
       await expect(
         destination.db
           .prepare(
+            `SELECT COUNT(*) AS count FROM workshop_tasks
+             WHERE idempotency_key IN (?, ?)`,
+          )
+          .bind(
+            `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-once`,
+            `${installationId}\u0000workspace:owner\u0000principal:owner\u0000create-twice`,
+          )
+          .first(),
+      ).resolves.toEqual({ count: 2 });
+      await expect(
+        destination.db
+          .prepare(
             `SELECT id, revision, outcome_kind, result
-             FROM workshop_tasks WHERE installation_id = ?`,
+             FROM workshop_tasks WHERE installation_id = ? ORDER BY id`,
           )
           .bind(installationId)
           .all(),
@@ -206,6 +277,12 @@ describe('Workshop owner backup handle factory', () => {
             revision: 2,
             outcome_kind: 'success',
             result: 'completed exactly once',
+          },
+          {
+            id: 'backup-task-2',
+            revision: 2,
+            outcome_kind: 'success',
+            result: 'second task completed exactly once',
           },
         ],
         success: true,
@@ -241,7 +318,7 @@ describe('Workshop owner backup handle factory', () => {
       };
       inconsistent.sections.workshop.tables.workshop_tasks?.push({
         ...inconsistent.sections.workshop.tables.workshop_tasks[0],
-        id: 'duplicate-idempotency',
+        title: 'Conflicting duplicate task identity',
       });
       await expect(
         destinationApi.inspectBackup(inconsistent),

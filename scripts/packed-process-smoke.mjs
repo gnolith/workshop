@@ -9,7 +9,6 @@ import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout } from 'node:timers';
-import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
 const packed = JSON.parse(
@@ -169,7 +168,14 @@ export async function inspectOwnWorkshopState() {
   const fullInspection = await backup.inspectBackup(
     JSON.parse(JSON.stringify(document)),
   );
-  return { ownerInspection, fullInspection };
+  return {
+    ownerInspection,
+    fullInspection,
+    taskIdentities: state.tables.workshop_tasks.map((row) => ({
+      id: row.id,
+      idempotencyKey: row.idempotency_key,
+    })),
+  };
 }
 export async function closeFixtureDatabase() {
   await db.close();
@@ -814,22 +820,68 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ),
   );
   assert.equal(populated.format, 'gnolith-workshop-public-backup-fixture-v1');
-  await terminate(child);
-  const adapterModule = await import(
-    `${pathToFileURL(join(fixture, 'adapter.mjs')).href}?inspect=${Date.now()}`
+  const secondBackupTask = await successfulToolCall(
+    origin,
+    token,
+    200,
+    'create_task',
+    {
+      idempotencyKey: 'backup-fixture-second-task-v1',
+      description: 'Complete a second independent backup task',
+      prompt: 'Return the second deterministic fixture outcome.',
+    },
   );
-  const ownInspection = await adapterModule.inspectOwnWorkshopState();
-  assert.ok(ownInspection.ownerInspection.taskCount >= 1);
+  const secondBackupClaim = await successfulToolCall(
+    origin,
+    token,
+    201,
+    'claim_task',
+    { taskId: secondBackupTask.id, leaseSeconds: 300 },
+  );
+  await successfulToolCall(origin, token, 202, 'complete_task', {
+    taskId: secondBackupTask.id,
+    leaseToken: secondBackupClaim.leaseToken,
+    expectedRevision:
+      secondBackupClaim.task?.revision ?? secondBackupClaim.revision,
+    idempotencyKey: 'backup-fixture-second-task-complete-v1',
+    result: 'Second backup fixture completed.',
+    outcomeKind: 'success',
+  });
+  await terminate(child);
+  const ownInspection = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        join(root, 'scripts', 'inspect-packed-owner.mjs'),
+        join(fixture, 'adapter.mjs'),
+      ],
+      { cwd: root, encoding: 'utf8' },
+    ),
+  );
+  assert.ok(ownInspection.ownerInspection.taskCount >= 2);
   assert.ok(ownInspection.ownerInspection.memoryCount >= 1);
   assert.ok(ownInspection.ownerInspection.promptCount >= 1);
   assert.equal(ownInspection.fullInspection.valid, true);
-  await adapterModule.closeFixtureDatabase();
+  assert.deepEqual(
+    ownInspection.taskIdentities
+      .map(({ idempotencyKey }) => idempotencyKey)
+      .sort(),
+    [
+      'installation:packed\u0000workspace:packed\u0000principal:packed\u0000backup-fixture-second-task-v1',
+      'installation:packed\u0000workspace:packed\u0000principal:packed\u0000backup-fixture-task-v1',
+    ],
+  );
   process.stdout.write(
     `${JSON.stringify({ packedProcess: 'ok', catalogDigest: '7a66ccb7ed6c5ae33be526a318376b895d2ecb122d7e723fb3117baf8ad66224' })}\n`,
   );
 } finally {
   if (child?.exitCode === null) await terminate(child);
-  await rm(fixture, { recursive: true, force: true });
+  await rm(fixture, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
   await rm(tarball, { force: true });
 }
 
