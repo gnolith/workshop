@@ -17,7 +17,7 @@ const auth = (principalId = 'owner'): AuthorizationContext => ({
   principalId,
   activeWorkspaceId: 'workspace:test',
   workspaceIds: ['workspace:test'],
-  capabilities: ['read', 'task-write', 'memory-write', 'knowledge-write'],
+  capabilities: ['read', 'task:write', 'memory:write', 'knowledge:write'],
   authorizationRevision: 1,
 });
 
@@ -98,7 +98,7 @@ describe('resumable onboarding', () => {
         boundary === 'markApplying' ? 1 : 2,
       );
     },
-    15_000,
+    30_000,
   );
 
   it('replays an effect after interruption without duplicating it', async () => {

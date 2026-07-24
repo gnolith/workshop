@@ -46,7 +46,7 @@ import type { ContextQueryValidator } from './sparql.js';
 import {
   commitWorkshopCanonicalSearchMutationV1,
   type WorkshopSearchDomainV1,
-} from './search.js';
+} from './canonical-producer.js';
 import {
   contextQueries,
   isoDate,
@@ -56,6 +56,12 @@ import {
   requiredText,
   validation,
 } from './validation.js';
+import { digestWorkshopOperationRequest } from './idempotency.js';
+
+const LEASE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const LEASE_DIGEST_PREFIX = new TextEncoder().encode(
+  'gnolith-task-lease-v1\u0000',
+);
 
 interface TaskRow {
   id: string;
@@ -90,6 +96,38 @@ interface TaskRow {
   authorization_revision: number | null;
   search_event_id: string | null;
   search_event_sequence: number | null;
+  lease_id: string | null;
+  lease_token_digest: string | null;
+  lease_owner_principal_id: string | null;
+  lease_expires_at: string | null;
+}
+
+function base64url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64url');
+}
+
+function decodeLeaseToken(value: string): Uint8Array {
+  if (!LEASE_TOKEN_PATTERN.test(value))
+    throw new WorkshopError('validation_failed', 'Lease token is invalid', 400);
+  const bytes = Uint8Array.from(Buffer.from(value, 'base64url'));
+  if (bytes.byteLength !== 32) {
+    bytes.fill(0);
+    throw new WorkshopError('validation_failed', 'Lease token is invalid', 400);
+  }
+  return bytes;
+}
+
+async function digestLeaseToken(token: Uint8Array): Promise<string> {
+  const input = new Uint8Array(LEASE_DIGEST_PREFIX.length + token.length);
+  input.set(LEASE_DIGEST_PREFIX);
+  input.set(token, LEASE_DIGEST_PREFIX.length);
+  try {
+    return Buffer.from(await crypto.subtle.digest('SHA-256', input)).toString(
+      'hex',
+    );
+  } finally {
+    input.fill(0);
+  }
 }
 
 const AUTHORIZED_ID_BATCH = 80;
@@ -104,10 +142,25 @@ export interface TaskServiceOptions {
   search?: WorkshopSearchDomainV1;
 }
 
+export interface TaskLeaseClaim {
+  task: Task;
+  leaseId: string;
+  leaseToken: string;
+  expiresAt: string;
+}
+
+export interface TaskLeaseReleaseReceipt {
+  taskId: string;
+  released: true;
+  revision: number;
+  replayed: boolean;
+}
+
 export class TaskService {
   readonly #limits: WorkshopLimits;
   readonly #clock: () => Date;
   readonly #createId: () => string;
+  readonly #taskMutationTails = new Map<string, Promise<void>>();
 
   constructor(
     readonly db: D1DatabaseLike,
@@ -290,7 +343,7 @@ export class TaskService {
     input: CreateTaskInput,
     authorization: AuthorizationContext,
   ): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     const workspaceId = requireActiveWorkspace(context);
     const scope = normalizeVisibilityScope(
       input.visibility ?? defaultVisibility(context),
@@ -409,8 +462,13 @@ export class TaskService {
     id: string,
     input: UpdateTaskInput,
     authorization: AuthorizationContext,
+    lease?: {
+      tokenDigest: string;
+      principalId: string;
+      expiresAfter: string;
+    },
   ): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     const current = await this.#getForMutation(id, context);
     if (current.completedAt || current.archivedAt) {
       throw new WorkshopError(
@@ -562,6 +620,7 @@ export class TaskService {
                visibility_scope = ?, authorization_revision = ?, policy_revision = ?,
                revision = ?, updated_at = ?, search_event_id = ?, search_event_sequence = NULL
            WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
+             ${lease ? 'AND lease_token_digest = ? AND lease_owner_principal_id = ? AND lease_expires_at > ?' : ''}
              AND ${predicate.sql}
            RETURNING *`,
           values: [
@@ -586,6 +645,9 @@ export class TaskService {
             eventId,
             id,
             expected.value,
+            ...(lease
+              ? [lease.tokenDigest, lease.principalId, lease.expiresAfter]
+              : []),
             ...predicate.values,
           ],
         },
@@ -604,19 +666,64 @@ export class TaskService {
     });
   }
 
+  async updateWithLease(
+    id: string,
+    input: UpdateTaskInput,
+    leaseTokenValue: unknown,
+    authorization: AuthorizationContext,
+  ): Promise<Task> {
+    const context = await this.#context(authorization, 'task:write');
+    const leaseToken = requiredText(leaseTokenValue, 'leaseToken', 4096);
+    const tokenBytes = decodeLeaseToken(leaseToken);
+    const tokenDigest = await digestLeaseToken(tokenBytes);
+    tokenBytes.fill(0);
+    return this.update(id, input, context, {
+      tokenDigest,
+      principalId: context.principalId,
+      expiresAfter: this.#clock().toISOString(),
+    });
+  }
+
   async archive(
     id: string,
     options: {
       expectedRevision?: number;
       expectedUpdatedAt?: string;
+      leaseToken?: unknown;
     },
     authorization: AuthorizationContext,
   ): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     const current = await this.#getForMutation(id, context);
     const predicate = visibilitySql('workshop_tasks', context);
     const expected = revisionPrecondition(options);
     const now = this.#clock().toISOString();
+    let leaseTokenDigest: string | null = null;
+    if (options.leaseToken !== undefined) {
+      const leaseToken = requiredText(options.leaseToken, 'leaseToken', 4096);
+      const tokenBytes = decodeLeaseToken(leaseToken);
+      leaseTokenDigest = await digestLeaseToken(tokenBytes);
+      tokenBytes.fill(0);
+    }
+    if (leaseTokenDigest !== null && !context.capabilities.includes('admin')) {
+      const ownedLease = await this.db
+        .prepare(
+          `SELECT lease_id FROM workshop_tasks
+           WHERE installation_id = ? AND id = ?
+             AND lease_token_digest = ? AND lease_owner_principal_id = ?
+             AND lease_expires_at > ?`,
+        )
+        .bind(
+          context.installationId,
+          id,
+          leaseTokenDigest,
+          context.principalId,
+          now,
+        )
+        .first<{ lease_id: string }>();
+      if (!ownedLease)
+        throw new WorkshopError('conflict', 'Task lease is not owned', 409);
+    }
     return this.#mutation('task.archive', context.principalId, id, async () => {
       const eventId = crypto.randomUUID();
       const next: Task = {
@@ -634,10 +741,20 @@ export class TaskService {
         await this.#predecessor(id, context),
         {
           sql: `UPDATE workshop_tasks SET archived_at = ?, claimed = 0, claimed_at = NULL,
+             lease_id = NULL, lease_token_digest = NULL,
+             lease_owner_principal_id = NULL, lease_expires_at = NULL,
              revision = ?, authorization_revision = ?, updated_at = ?,
              search_event_id = ?, search_event_sequence = NULL
            WHERE id = ? AND ${expected.column} = ? AND completed_at IS NULL AND archived_at IS NULL
-             AND (claimed = 0 OR ? = 1) AND ${predicate.sql} RETURNING *`,
+             AND (
+               ? = 1
+               OR (claimed = 0 AND ? IS NULL)
+               OR (
+                 lease_token_digest = ? AND lease_owner_principal_id = ?
+                 AND lease_expires_at > ?
+               )
+             )
+             AND ${predicate.sql} RETURNING *`,
           values: [
             next.archivedAt,
             next.revision,
@@ -647,6 +764,10 @@ export class TaskService {
             id,
             expected.value,
             context.capabilities.includes('admin') ? 1 : 0,
+            leaseTokenDigest,
+            leaseTokenDigest,
+            context.principalId,
+            now,
             ...predicate.values,
           ],
         },
@@ -663,7 +784,7 @@ export class TaskService {
   }
 
   async claim(id: string, authorization: AuthorizationContext): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     const current = await this.#getForMutation(id, context);
     const predicate = visibilitySql('workshop_tasks', context);
     const now = this.#clock().toISOString();
@@ -711,14 +832,381 @@ export class TaskService {
     });
   }
 
+  async claimLease(
+    idValue: unknown,
+    leaseSecondsValue: unknown,
+    authorization: AuthorizationContext,
+  ): Promise<TaskLeaseClaim> {
+    const id = requiredText(idValue, 'taskId', 256);
+    const leaseSeconds =
+      leaseSecondsValue === undefined ? 900 : Number(leaseSecondsValue);
+    if (
+      !Number.isSafeInteger(leaseSeconds) ||
+      leaseSeconds < 1 ||
+      leaseSeconds > 86_400
+    )
+      throw new WorkshopError(
+        'validation_failed',
+        'leaseSeconds must be an integer between 1 and 86400',
+        400,
+      );
+    return this.#serializeTaskMutation(id, async () => {
+      const context = await this.#context(authorization, 'task:write');
+      const predicate = visibilitySql('workshop_tasks', context);
+      const now = this.#clock();
+      const claimedAt = now.toISOString();
+      const expiresAt = new Date(
+        now.getTime() + leaseSeconds * 1000,
+      ).toISOString();
+      const leaseId = this.#createId();
+      const tokenBytes = crypto.getRandomValues(new Uint8Array(32));
+      const leaseToken = base64url(tokenBytes);
+      const tokenDigest = await digestLeaseToken(tokenBytes);
+      tokenBytes.fill(0);
+      const priorLease = await this.db
+        .prepare(
+          `SELECT lease_id, lease_expires_at FROM workshop_tasks
+         WHERE id = ? AND installation_id = ?`,
+        )
+        .bind(id, context.installationId)
+        .first<{ lease_id: string | null; lease_expires_at: string | null }>();
+      const eventId = this.#createId();
+      const current = await this.#getForMutation(id, context);
+      if (
+        priorLease?.lease_id &&
+        priorLease.lease_expires_at &&
+        priorLease.lease_expires_at > claimedAt
+      )
+        throw new WorkshopError(
+          'conflict',
+          'Task is unavailable or has an active lease',
+          409,
+        );
+      const next: Task = {
+        ...current,
+        claimed: true,
+        claimedAt: nextTimestamp(claimedAt, current.updatedAt),
+        revision: current.revision + 1,
+        updatedAt: nextTimestamp(claimedAt, current.updatedAt),
+        authorizationRevision: context.authorizationRevision,
+      };
+      let row: TaskRow | null;
+      try {
+        row = await this.#commitCanonical(
+          context,
+          next,
+          'task.state',
+          await this.#predecessor(id, context),
+          {
+            sql: `UPDATE workshop_tasks
+           SET claimed = 1, claimed_at = ?, lease_id = ?,
+               lease_token_digest = ?, lease_owner_principal_id = ?,
+               lease_expires_at = ?, revision = revision + 1,
+               authorization_revision = ?, updated_at = ?,
+               search_event_id = ?, search_event_sequence = NULL
+           WHERE id = ? AND revision = ? AND completed_at IS NULL AND archived_at IS NULL
+             AND (lease_id IS NULL OR lease_expires_at <= ?)
+             AND ${predicate.sql}
+           RETURNING *`,
+            values: [
+              next.claimedAt,
+              leaseId,
+              tokenDigest,
+              context.principalId,
+              expiresAt,
+              context.authorizationRevision,
+              next.updatedAt,
+              eventId,
+              id,
+              current.revision,
+              claimedAt,
+              ...predicate.values,
+            ],
+          },
+          eventId,
+          [
+            {
+              sql: `INSERT INTO workshop_task_lease_events
+           (event_id, installation_id, task_id, lease_id, actor_principal_id,
+            event_kind, task_revision, lease_expires_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              values: [
+                eventId,
+                context.installationId,
+                id,
+                leaseId,
+                context.principalId,
+                priorLease?.lease_id &&
+                priorLease.lease_expires_at &&
+                priorLease.lease_expires_at <= claimedAt
+                  ? 'reclaimed_expired'
+                  : 'claimed',
+                next.revision,
+                expiresAt,
+                claimedAt,
+              ],
+            },
+          ],
+        );
+      } catch (error) {
+        if (
+          await this.#claimRaceLost(
+            id,
+            context.installationId,
+            current.revision,
+            claimedAt,
+            error,
+          )
+        )
+          throw new WorkshopError(
+            'conflict',
+            'Task is unavailable or has an active lease',
+            409,
+          );
+        throw error;
+      }
+      if (!row)
+        throw new WorkshopError(
+          'conflict',
+          'Task is unavailable or has an active lease',
+          409,
+        );
+      return { task: toTask(row), leaseId, leaseToken, expiresAt };
+    });
+  }
+
+  async #claimRaceLost(
+    taskId: string,
+    installationId: string,
+    expectedRevision: number,
+    claimedAt: string,
+    cause: unknown,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const row = await this.db
+          .prepare(
+            `SELECT revision, lease_id, lease_expires_at
+             FROM workshop_tasks
+             WHERE id = ? AND installation_id = ?`,
+          )
+          .bind(taskId, installationId)
+          .first<{
+            revision: number;
+            lease_id: string | null;
+            lease_expires_at: string | null;
+          }>();
+        if (
+          row &&
+          (row.revision !== expectedRevision ||
+            (row.lease_id !== null &&
+              row.lease_expires_at !== null &&
+              row.lease_expires_at > claimedAt))
+        )
+          return true;
+      } catch {
+        // A concurrent native transaction may still hold the database lock.
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 5 * (attempt + 1));
+      });
+    }
+    return (
+      cause instanceof Error &&
+      /SQLITE_BUSY|database is locked|constraint failed|transaction conflict/iu.test(
+        cause.message,
+      )
+    );
+  }
+
+  async releaseLease(
+    input: {
+      taskId: unknown;
+      leaseToken: unknown;
+      expectedRevision: unknown;
+      idempotencyKey: unknown;
+    },
+    authorization: AuthorizationContext,
+  ): Promise<TaskLeaseReleaseReceipt> {
+    const taskId = requiredText(input.taskId, 'taskId', 256);
+    const leaseToken = requiredText(input.leaseToken, 'leaseToken', 4096);
+    const idempotencyKey = requiredText(
+      input.idempotencyKey,
+      'idempotencyKey',
+      256,
+    );
+    const expectedRevision = Number(input.expectedRevision);
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+      throw new WorkshopError(
+        'validation_failed',
+        'expectedRevision is invalid',
+        400,
+      );
+    const context = await this.#context(authorization, 'task:write');
+    const tokenBytes = decodeLeaseToken(leaseToken);
+    const tokenDigest = await digestLeaseToken(tokenBytes);
+    tokenBytes.fill(0);
+    const requestDigest = await digestWorkshopOperationRequest({
+      operation: 'release',
+      taskId,
+      leaseTokenDigest: tokenDigest,
+      expectedRevision,
+    });
+    const replay = await this.db
+      .prepare(
+        `SELECT task_id, operation, expected_revision, request_digest, receipt_json
+         FROM workshop_task_lease_receipts
+         WHERE installation_id = ? AND principal_id = ? AND idempotency_key = ?`,
+      )
+      .bind(context.installationId, context.principalId, idempotencyKey)
+      .first<{
+        task_id: string;
+        operation: string;
+        expected_revision: number;
+        request_digest: string | null;
+        receipt_json: string;
+      }>();
+    if (replay) {
+      if (
+        replay.task_id !== taskId ||
+        replay.operation !== 'release' ||
+        replay.expected_revision !== expectedRevision ||
+        replay.request_digest !== requestDigest
+      )
+        throw new WorkshopError(
+          'conflict',
+          'Idempotency key was used for another mutation',
+          409,
+        );
+      return {
+        ...(JSON.parse(replay.receipt_json) as TaskLeaseReleaseReceipt),
+        replayed: true,
+      };
+    }
+    const now = this.#clock().toISOString();
+    const predicate = visibilitySql('workshop_tasks', context);
+    const current = await this.#getForMutation(taskId, context);
+    if (current.revision !== expectedRevision)
+      throw new WorkshopError('conflict', 'Task revision changed', 409);
+    const priorLease = await this.db
+      .prepare(
+        `SELECT lease_id FROM workshop_tasks
+         WHERE id = ? AND lease_token_digest = ? AND lease_owner_principal_id = ?`,
+      )
+      .bind(taskId, tokenDigest, context.principalId)
+      .first<{ lease_id: string }>();
+    const eventId = this.#createId();
+    const { claimedAt: _claimedAt, ...withoutClaimedAt } = current;
+    void _claimedAt;
+    const next: Task = {
+      ...withoutClaimedAt,
+      claimed: false,
+      revision: current.revision + 1,
+      updatedAt: nextTimestamp(now, current.updatedAt),
+      authorizationRevision: context.authorizationRevision,
+    };
+    const receipt: TaskLeaseReleaseReceipt = {
+      taskId,
+      released: true,
+      revision: next.revision,
+      replayed: false,
+    };
+    const row = await this.#commitCanonical(
+      context,
+      next,
+      'task.state',
+      await this.#predecessor(taskId, context),
+      {
+        sql: `UPDATE workshop_tasks
+           SET claimed = 0, claimed_at = NULL, lease_id = NULL,
+               lease_token_digest = NULL, lease_owner_principal_id = NULL,
+               lease_expires_at = NULL, revision = revision + 1,
+               authorization_revision = ?, updated_at = ?,
+               search_event_id = ?, search_event_sequence = NULL
+           WHERE id = ? AND revision = ? AND lease_token_digest = ?
+             AND lease_owner_principal_id = ? AND lease_expires_at > ?
+             AND completed_at IS NULL AND archived_at IS NULL
+             AND ${predicate.sql}
+           RETURNING *`,
+        values: [
+          context.authorizationRevision,
+          next.updatedAt,
+          eventId,
+          taskId,
+          expectedRevision,
+          tokenDigest,
+          context.principalId,
+          now,
+          ...predicate.values,
+        ],
+      },
+      eventId,
+      [
+        {
+          sql: `INSERT INTO workshop_task_lease_receipts
+           (installation_id, principal_id, idempotency_key, task_id, operation,
+            expected_revision, resulting_revision, request_digest, receipt_json, created_at)
+           VALUES (?, ?, ?, ?, 'release', ?, ?, ?, ?, ?)`,
+          values: [
+            context.installationId,
+            context.principalId,
+            idempotencyKey,
+            taskId,
+            expectedRevision,
+            next.revision,
+            requestDigest,
+            JSON.stringify(receipt),
+            now,
+          ],
+        },
+        {
+          sql: `INSERT INTO workshop_task_lease_events
+           (event_id, installation_id, task_id, lease_id, actor_principal_id,
+            event_kind, task_revision, lease_expires_at, created_at)
+           VALUES (?, ?, ?, ?, ?, 'released', ?, NULL, ?)`,
+          values: [
+            this.#createId(),
+            context.installationId,
+            taskId,
+            priorLease?.lease_id ?? taskId,
+            context.principalId,
+            next.revision,
+            now,
+          ],
+        },
+      ],
+    );
+    if (!row)
+      throw new WorkshopError(
+        'conflict',
+        'Lease is invalid, expired, not owned, or revision changed',
+        409,
+      );
+    return receipt;
+  }
+
   async complete(
     id: string,
     resultValue: unknown,
     authorization: AuthorizationContext,
     retryOnConcurrentEdit = true,
+    lease?: {
+      tokenDigest: string;
+      principalId: string;
+      expiresAfter: string;
+      expectedRevision: number;
+      receipt?: {
+        idempotencyKey: string;
+        leaseId: string;
+        createdAt: string;
+        requestDigest: string;
+      };
+    },
   ): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     const current = await this.#getForMutation(id, context);
+    if (lease && current.revision !== lease.expectedRevision)
+      throw new WorkshopError('conflict', 'Task revision changed', 409);
     const predicate = visibilitySql('workshop_tasks', context);
     const outcome = normalizeOutcome(resultValue);
     const result = requiredText(
@@ -755,9 +1243,12 @@ export class TaskService {
             {
               sql: `UPDATE workshop_tasks
            SET claimed = 0, claimed_at = NULL, completed_at = ?, result = ?, outcome_kind = ?,
+               lease_id = NULL, lease_token_digest = NULL,
+               lease_owner_principal_id = NULL, lease_expires_at = NULL,
                revision = ?, authorization_revision = ?, updated_at = ?,
                search_event_id = ?, search_event_sequence = NULL
            WHERE id = ? AND revision = ? AND claimed = 1 AND completed_at IS NULL AND archived_at IS NULL
+             ${lease ? 'AND lease_token_digest = ? AND lease_owner_principal_id = ? AND lease_expires_at > ?' : ''}
              AND ${predicate.sql} RETURNING *`,
               values: [
                 next.completedAt,
@@ -769,10 +1260,49 @@ export class TaskService {
                 eventId,
                 id,
                 current.revision,
+                ...(lease
+                  ? [lease.tokenDigest, lease.principalId, lease.expiresAfter]
+                  : []),
                 ...predicate.values,
               ],
             },
             eventId,
+            lease?.receipt
+              ? [
+                  {
+                    sql: `INSERT INTO workshop_task_lease_receipts
+                     (installation_id, principal_id, idempotency_key, task_id, operation,
+                      expected_revision, resulting_revision, request_digest, receipt_json, created_at)
+                     VALUES (?, ?, ?, ?, 'complete', ?, ?, ?, ?, ?)`,
+                    values: [
+                      context.installationId,
+                      context.principalId,
+                      lease.receipt.idempotencyKey,
+                      id,
+                      lease.expectedRevision,
+                      next.revision,
+                      lease.receipt.requestDigest,
+                      JSON.stringify(next),
+                      lease.receipt.createdAt,
+                    ],
+                  },
+                  {
+                    sql: `INSERT INTO workshop_task_lease_events
+                     (event_id, installation_id, task_id, lease_id, actor_principal_id,
+                      event_kind, task_revision, lease_expires_at, created_at)
+                     VALUES (?, ?, ?, ?, ?, 'completed', ?, NULL, ?)`,
+                    values: [
+                      this.#createId(),
+                      context.installationId,
+                      id,
+                      lease.receipt.leaseId,
+                      context.principalId,
+                      next.revision,
+                      lease.receipt.createdAt,
+                    ],
+                  },
+                ]
+              : [],
           );
         } catch (error) {
           const retried = await this.#retryCompletion(
@@ -803,12 +1333,118 @@ export class TaskService {
     );
   }
 
+  async completeLease(
+    input: {
+      taskId: unknown;
+      leaseToken: unknown;
+      expectedRevision: unknown;
+      idempotencyKey: unknown;
+      result: unknown;
+      outcomeKind?: unknown;
+    },
+    authorization: AuthorizationContext,
+  ): Promise<Task> {
+    const taskId = requiredText(input.taskId, 'taskId', 256);
+    const idempotencyKey = requiredText(
+      input.idempotencyKey,
+      'idempotencyKey',
+      256,
+    );
+    const expectedRevision = Number(input.expectedRevision);
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+      throw new WorkshopError(
+        'validation_failed',
+        'expectedRevision is invalid',
+        400,
+      );
+    const context = await this.#context(authorization, 'task:write');
+    const leaseToken = requiredText(input.leaseToken, 'leaseToken', 4096);
+    const tokenBytes = decodeLeaseToken(leaseToken);
+    const tokenDigest = await digestLeaseToken(tokenBytes);
+    tokenBytes.fill(0);
+    const outcome = normalizeOutcome({
+      result: input.result,
+      kind: input.outcomeKind ?? 'success',
+    });
+    const result = requiredText(
+      outcome.result,
+      'result',
+      this.#limits.maxResultBytes,
+    );
+    const requestDigest = await digestWorkshopOperationRequest({
+      operation: 'complete',
+      taskId,
+      leaseTokenDigest: tokenDigest,
+      expectedRevision,
+      result,
+      outcomeKind: outcome.kind,
+    });
+    const replay = await this.db
+      .prepare(
+        `SELECT task_id, operation, expected_revision, request_digest, receipt_json
+         FROM workshop_task_lease_receipts
+         WHERE installation_id = ? AND principal_id = ? AND idempotency_key = ?`,
+      )
+      .bind(context.installationId, context.principalId, idempotencyKey)
+      .first<{
+        task_id: string;
+        operation: string;
+        expected_revision: number;
+        request_digest: string | null;
+        receipt_json: string;
+      }>();
+    if (replay) {
+      if (
+        replay.task_id !== taskId ||
+        replay.operation !== 'complete' ||
+        replay.expected_revision !== expectedRevision ||
+        replay.request_digest !== requestDigest
+      )
+        throw new WorkshopError(
+          'conflict',
+          'Idempotency key was used for another mutation',
+          409,
+        );
+      return JSON.parse(replay.receipt_json) as Task;
+    }
+    const now = this.#clock().toISOString();
+    const priorLease = await this.db
+      .prepare(
+        `SELECT lease_id FROM workshop_tasks
+         WHERE id = ? AND lease_token_digest = ? AND lease_owner_principal_id = ?`,
+      )
+      .bind(taskId, tokenDigest, context.principalId)
+      .first<{ lease_id: string }>();
+    const task = await this.complete(
+      taskId,
+      {
+        result,
+        kind: outcome.kind,
+      },
+      context,
+      false,
+      {
+        tokenDigest,
+        principalId: context.principalId,
+        expiresAfter: now,
+        expectedRevision,
+        receipt: {
+          idempotencyKey,
+          leaseId: priorLease?.lease_id ?? taskId,
+          createdAt: now,
+          requestDigest,
+        },
+      },
+    );
+    return task;
+  }
+
   async resetAbandonedClaim(
     id: string,
     claimedBefore: string,
     authorization: AuthorizationContext,
   ): Promise<Task> {
-    const context = await this.#context(authorization, 'task-write');
+    const context = await this.#context(authorization, 'task:write');
     requireCapability(context, 'admin');
     const current = await this.#getForMutation(id, context);
     const predicate = visibilitySql('workshop_tasks', context);
@@ -920,16 +1556,8 @@ export class TaskService {
     id: string,
     context: AuthorizationContext,
   ): Promise<{ eventId: string; sequence: number }> {
-    const row = await this.db
-      .prepare(
-        `SELECT current_event_id AS event_id, current_event_sequence AS sequence
-         FROM taproot_unified_search_source_registry
-         WHERE installation_id = ? AND source_kind = 'task' AND source_id = ?`,
-      )
-      .bind(context.installationId, id)
-      .first<{ event_id: string; sequence: number }>();
-    if (!row || !Number.isSafeInteger(Number(row.sequence))) throw denied();
-    return { eventId: row.event_id, sequence: Number(row.sequence) };
+    if (!this.options.search) throw denied();
+    return this.options.search.currentPredecessor(id, context);
   }
 
   async #commitCanonical(
@@ -939,6 +1567,10 @@ export class TaskService {
     predecessor: { eventId: string; sequence: number } | null,
     mutation: { sql: string; values: readonly unknown[] },
     eventId: string,
+    additionalStatements: readonly {
+      sql: string;
+      values: readonly unknown[];
+    }[] = [],
   ): Promise<TaskRow | null> {
     if (!this.options.search)
       throw new WorkshopError(
@@ -962,7 +1594,11 @@ export class TaskService {
           {
             sql: `INSERT INTO workshop_task_revisions
               (task_id, revision, snapshot_json, actor_principal_id, event_id, created_at)
-              VALUES (?, ?, ?, ?, ?, ?)`,
+              SELECT ?, ?, ?, ?, ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM workshop_tasks
+                WHERE id = ? AND revision = ? AND search_event_id = ?
+              )`,
             values: [
               next.id,
               next.revision,
@@ -970,8 +1606,12 @@ export class TaskService {
               context.principalId,
               eventId,
               next.updatedAt,
+              next.id,
+              next.revision,
+              eventId,
             ],
           },
+          ...additionalStatements,
         ],
       },
     );
@@ -1101,9 +1741,26 @@ export class TaskService {
     );
   }
 
+  #serializeTaskMutation<T>(
+    taskId: string,
+    execute: () => Promise<T>,
+  ): Promise<T> {
+    const prior = this.#taskMutationTails.get(taskId) ?? Promise.resolve();
+    const current = prior.catch(() => undefined).then(execute);
+    const tail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#taskMutationTails.set(taskId, tail);
+    return current.finally(() => {
+      if (this.#taskMutationTails.get(taskId) === tail)
+        this.#taskMutationTails.delete(taskId);
+    });
+  }
+
   async #context(
     authorization: AuthorizationContext,
-    capability: 'read' | 'task-write' | 'admin' = 'read',
+    capability: 'read' | 'task:write' | 'admin' = 'read',
   ): Promise<AuthorizationContext> {
     const context = await requireCurrentAuthorization(
       this.options.authorization,

@@ -1,241 +1,312 @@
-import type {
-  AuthorizedSearchServiceV1,
-  ExternalSearchDomainMutationCoordinatorV1,
-  ExternalSearchLoadedSourceV1,
-  ExternalSearchProducerCallbacksV1,
-  ExternalSearchProducerDescriptorV1,
-  ExternalSearchProducerGuardV1,
-  SearchMaterializationAdminGuardV1,
-  SearchProjectionFieldV1,
-  SearchProjectionSegmentV1,
-  SearchRequest,
-  SearchPage,
-  SemanticSearchAdminV1,
-  TaprootHostWriteCapability,
-  TaprootWriteOptions,
-  UnifiedSearchFiltersV1,
-  UnifiedSearchReferenceV1,
-} from '@gnolith/taproot';
+import type { TaprootHostWriteCapability } from '@gnolith/taproot';
+import {
+  canonicalSearchHashV1,
+  createAuthorizedSearchServiceV1,
+  createSearchMaterializationAdminGuardV1,
+  createSemanticSearchAdminV1,
+  registerExternalProducerKindV1,
+  registerExternalProducerV1,
+  type ExternalProducer,
+  type ExternalProjectedSearchDocumentV1,
+  type ExternalSearchKind,
+  type ProducerSource,
+  type SearchMaterializationAdminGuardV1,
+  type SearchRequest,
+  type SearchResultV1,
+  type SemanticSearchAdminV1,
+} from '@gnolith/taproot/search';
 import type { AuthorizationContext } from '../protocol/authorization.js';
 import { WorkshopError } from '../protocol/errors.js';
-import type { D1DatabaseLike, D1ResultLike } from './database.js';
 import {
+  authorizeRecord,
   normalizeVisibilityScope,
-  serializeVisibilityScope,
   type VisibilityScopeV1,
 } from './authorization.js';
+import {
+  createWorkshopCanonicalOwnerAdapterV1,
+  type WorkshopSearchDomainV1,
+} from './canonical-producer.js';
+import type { D1DatabaseLike } from './database.js';
 
 export type WorkshopSearchSourceKind = 'task' | 'memory' | 'prompt';
 
-export interface WorkshopSearchDomainV1 {
-  readonly coordinator: ExternalSearchDomainMutationCoordinatorV1;
-  readonly producer: ExternalSearchProducerGuardV1;
-  readonly descriptor: Readonly<ExternalSearchProducerDescriptorV1>;
+export interface WorkshopSearchIntegrationDomainV1 extends WorkshopSearchDomainV1 {
+  /** Compatibility spelling for the pre-0.5 Workshop test/host surface. */
+  readonly producer: {
+    adoptLegacyPage(
+      context: AuthorizationContext,
+      input: { cursor?: string | null; limit: number },
+    ): Promise<{
+      enumerated: number;
+      adopted: number;
+      cursor: string | null;
+      complete: boolean;
+    }>;
+  };
 }
 
-interface ExternalAuthorization {
-  version: 1;
-  sourceId: string;
-  sourceRevision: string;
-  sourcePolicyRevision: number;
-  workspaceId: string | null;
-  ownerPrincipalId: string;
-  visibility: VisibilityScopeV1;
+export type WorkshopSearchRequestV1 = Omit<SearchRequest, 'kinds'> & {
+  kinds?: readonly (
+    | 'statement'
+    | 'item'
+    | 'task'
+    | 'memory'
+    | 'prompt'
+    | 'resource'
+    | 'annotation'
+  )[];
+};
+
+export type WorkshopSearchKindV1 =
+  | 'statement'
+  | 'item'
+  | 'task'
+  | 'memory'
+  | 'prompt'
+  | 'resource'
+  | 'annotation';
+
+export type WorkshopSearchResultV1 = Omit<SearchResultV1, 'kind'> & {
+  kind: WorkshopSearchKindV1;
+};
+
+export interface WorkshopSearchPageV1 {
+  results: WorkshopSearchResultV1[];
+  cursor?: string;
 }
 
-export interface WorkshopCanonicalSearchMutationV1 {
-  context: AuthorizationContext;
-  eventId: string;
-  sourceId: string;
-  operation: 'upsert' | 'delete';
-  changeClass: string;
-  sourceRevision: number;
-  sourcePolicyRevision: number;
-  predecessor: { eventId: string; sequence: number } | null;
-  canonicalPostState: unknown;
-  statements: readonly { sql: string; values: readonly unknown[] }[];
-}
-
-export interface WorkshopCanonicalSearchMutationReceiptV1 {
-  eventId: string;
-  authorizationRevision: number;
-  searchGeneration: number;
-  results: readonly D1ResultLike[];
-}
-
-export async function commitWorkshopCanonicalSearchMutationV1(
-  domain: WorkshopSearchDomainV1,
-  input: WorkshopCanonicalSearchMutationV1,
-): Promise<WorkshopCanonicalSearchMutationReceiptV1> {
-  const sealed = await domain.coordinator.sealCanonicalMutation({
-    ...input,
-    context: input.context,
-    sourceRevision: String(input.sourceRevision),
-  });
-  const receipt = await domain.producer.commitCanonicalMutation(sealed);
-  return receipt;
+export interface WorkshopAuthorizedSearchServiceV1 {
+  search(
+    request: WorkshopSearchRequestV1,
+    context: AuthorizationContext,
+  ): Promise<WorkshopSearchPageV1>;
+  hydrate(
+    result: WorkshopSearchResultV1,
+    context: AuthorizationContext,
+  ): Promise<unknown>;
 }
 
 export interface WorkshopSearchIntegrationV1 {
-  readonly task: WorkshopSearchDomainV1;
-  readonly memory: WorkshopSearchDomainV1;
-  readonly prompt: WorkshopSearchDomainV1;
-  readonly service: AuthorizedSearchServiceV1;
+  readonly task: WorkshopSearchIntegrationDomainV1;
+  readonly memory: WorkshopSearchIntegrationDomainV1;
+  readonly prompt: WorkshopSearchIntegrationDomainV1;
+  readonly service: WorkshopAuthorizedSearchServiceV1;
   readonly materialization: SearchMaterializationAdminGuardV1;
   readonly semantic: SemanticSearchAdminV1;
   search(
-    request: SearchRequest,
+    request: WorkshopSearchRequestV1,
     context: AuthorizationContext,
-  ): Promise<SearchPage>;
+  ): Promise<WorkshopSearchPageV1>;
 }
 
 export interface CreateWorkshopSearchIntegrationOptionsV1 {
   db: D1DatabaseLike;
-  taproot: TaprootWriteOptions;
+  taproot: { baseIri: string; clock?: () => Date };
   hostCapability: TaprootHostWriteCapability;
   installationId: string;
   registrationContext: AuthorizationContext;
   clock?: () => Date;
   createId?: () => string;
+  semantic?: {
+    fetch?: typeof fetch;
+    resolveCredential?: (
+      selector: string,
+    ) => string | Promise<string | undefined> | undefined;
+  };
 }
 
-const CONTRACT_VERSION = 'taproot-external-search-producer-v1';
-const AUTHORIZATION_VERSION = 'workshop-cnf-policy-v1';
+const SEARCH_NAMESPACE = 'workshop';
 
 export async function createWorkshopSearchIntegrationV1(
   options: CreateWorkshopSearchIntegrationOptionsV1,
 ): Promise<WorkshopSearchIntegrationV1> {
-  const {
-    canonicalSearchHashV1,
-    createAuthorizedSearchServiceV1,
-    createExternalSearchDomainMutationCoordinatorV1,
-    createExternalSearchDomainPolicyAuthorityV1,
-    createExternalSearchProducerGuardV1,
-    createSearchMaterializationAdminGuardV1,
-    createSemanticSearchAdminV1,
-  } = await import('@gnolith/taproot');
-  const db = options.db;
-  const materialization = await createSearchMaterializationAdminGuardV1(
-    db,
-    options.taproot,
-    options.hostCapability,
-  );
-  await materialization.initialize(options.registrationContext);
-  const domains: Array<
-    readonly [WorkshopSearchSourceKind, WorkshopSearchDomainV1]
-  > = [];
-  for (const sourceKind of ['task', 'memory', 'prompt'] as const) {
-    const binding = {
-      domain: 'workshop',
-      sourceKind,
-      capability: capabilityFor(sourceKind),
-      changeClasses: changeClassesFor(sourceKind),
-    } as const;
-    const coordinator = await createExternalSearchDomainMutationCoordinatorV1(
-      db,
-      options.taproot,
-      options.hostCapability,
-      binding,
-    );
-    const authority = await createExternalSearchDomainPolicyAuthorityV1(
-      db,
-      options.taproot,
-      options.hostCapability,
-      binding,
-    );
-    const descriptor: ExternalSearchProducerDescriptorV1 = {
-      version: 1,
-      sourceKind,
-      owningDomain: 'workshop',
-      producerFingerprint: await canonicalSearchHashV1({
-        package: '@gnolith/workshop',
-        sourceKind,
-        contractVersion: CONTRACT_VERSION,
-        projectionVersion: `workshop-${sourceKind}-projection-v1`,
-        authorizationContractVersion: AUTHORIZATION_VERSION,
-      }),
-      contractVersion: CONTRACT_VERSION,
-      projectionVersion: `workshop-${sourceKind}-projection-v1`,
-      authorizationContractVersion: AUTHORIZATION_VERSION,
-    };
-    const callbacks = callbacksFor(
-      options.db,
-      options.installationId,
-      sourceKind,
-    );
-    const producer = await createExternalSearchProducerGuardV1(
-      db,
-      options.taproot,
-      options.hostCapability,
-      descriptor,
-      callbacks,
-      authority,
-      coordinator,
-    );
-    domains.push([sourceKind, { coordinator, producer, descriptor }]);
-  }
-  const byKind = Object.fromEntries(domains) as Record<
+  const domains = new Map<
     WorkshopSearchSourceKind,
-    WorkshopSearchDomainV1
-  >;
-  const semantic = createSemanticSearchAdminV1(db, {
+    WorkshopSearchIntegrationDomainV1
+  >();
+  const domainKinds = new Map<WorkshopSearchSourceKind, ExternalSearchKind>();
+  for (const sourceKind of ['task', 'memory', 'prompt'] as const) {
+    const controller = createWorkshopCanonicalOwnerAdapterV1(options.db);
+    const registeredKind = await registerExternalProducerKindV1(
+      options.db,
+      { baseIri: options.taproot.baseIri },
+      options.hostCapability,
+      {
+        installationId: options.installationId,
+        namespace: SEARCH_NAMESPACE,
+        localName: sourceKind,
+        ownerDomain: 'workshop',
+        adapter: controller.adapter,
+      },
+    );
+    const fingerprint = await canonicalSearchHashV1({
+      package: '@gnolith/workshop',
+      version: '0.5.0',
+      sourceKind,
+      projectionVersion: `workshop-${sourceKind}-projection-v1`,
+    });
+    const producer: ExternalProducer = {
+      descriptor: {
+        registration: registeredKind.registration,
+        implementationVersion: '0.5.0',
+        fingerprint,
+        projectionVersion: `workshop-${sourceKind}-projection-v1`,
+        changeClasses: changeClassesFor(sourceKind),
+      },
+      async enumerate(cursor, limit) {
+        const page = await enumerate(
+          options.db,
+          options.installationId,
+          sourceKind,
+          cursor,
+          limit,
+        );
+        return { ids: page.sourceIds, cursor: page.nextCursor };
+      },
+      async loadExact(sourceId, sourceRevision) {
+        const source = await load(
+          options.db,
+          options.installationId,
+          sourceKind,
+          sourceId,
+          sourceRevision ?? null,
+        );
+        if (!source)
+          throw new WorkshopError(
+            'not_found',
+            'Canonical source not found',
+            404,
+          );
+        return source;
+      },
+      project(source) {
+        return Promise.resolve(project(sourceKind, source));
+      },
+      async authorize(reference, context) {
+        const source = await load(
+          options.db,
+          options.installationId,
+          sourceKind,
+          reference.sourceId,
+          reference.sourceRevision,
+        );
+        if (!source) return false;
+        try {
+          authorizeSource(source, context);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      async hydrate(reference, context) {
+        const source = await load(
+          options.db,
+          options.installationId,
+          sourceKind,
+          reference.sourceId,
+          reference.sourceRevision,
+        );
+        if (!source)
+          throw new WorkshopError(
+            'not_found',
+            'Canonical source not found',
+            404,
+          );
+        authorizeSource(source, context);
+        return source.canonical;
+      },
+    };
+    const registered = await registerExternalProducerV1(
+      options.db,
+      {
+        baseIri: options.taproot.baseIri,
+        ...(options.clock ? { clock: options.clock } : {}),
+      },
+      options.hostCapability,
+      producer,
+    );
+    const domain = controller.bind(registered);
+    domainKinds.set(sourceKind, registered.kind);
+    domains.set(sourceKind, {
+      ...domain,
+      producer: {
+        async adoptLegacyPage(context, input) {
+          const receipt = await domain.adopt(context, input);
+          return { ...receipt, complete: receipt.cursor === null };
+        },
+      },
+    });
+  }
+
+  const semantic = createSemanticSearchAdminV1(options.db, {
     installationId: options.installationId,
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.createId ? { createId: options.createId } : {}),
+    ...(options.semantic?.fetch ? { fetch: options.semantic.fetch } : {}),
+    ...(options.semantic?.resolveCredential
+      ? { resolveCredential: options.semantic.resolveCredential }
+      : {}),
   });
-  const service = createAuthorizedSearchServiceV1(db, {
+  const rawService = createAuthorizedSearchServiceV1(options.db, {
     installationId: options.installationId,
     semantic,
   });
+  const materialization = await createSearchMaterializationAdminGuardV1(
+    options.db,
+    {
+      baseIri: options.taproot.baseIri,
+      ...(options.clock ? { clock: options.clock } : {}),
+    },
+    options.hostCapability,
+  );
+  await materialization.initialize(options.registrationContext);
+  const toTaprootRequest = ({
+    kinds,
+    ...request
+  }: WorkshopSearchRequestV1): SearchRequest => ({
+    ...request,
+    ...(kinds
+      ? {
+          kinds: kinds.map((kind) =>
+            kind === 'task' || kind === 'memory' || kind === 'prompt'
+              ? requiredDomainKind(domainKinds, kind)
+              : kind,
+          ),
+        }
+      : {}),
+  });
+  const service: WorkshopAuthorizedSearchServiceV1 = {
+    async search(request, context) {
+      const page = await rawService.search(toTaprootRequest(request), context);
+      return {
+        ...page,
+        results: page.results.map((result) => ({
+          ...result,
+          kind:
+            typeof result.kind === 'string'
+              ? result.kind
+              : (result.kind.localName as WorkshopSearchKindV1),
+        })),
+      };
+    },
+    hydrate(result, context) {
+      const kind =
+        result.kind === 'task' ||
+        result.kind === 'memory' ||
+        result.kind === 'prompt'
+          ? requiredDomainKind(domainKinds, result.kind)
+          : result.kind;
+      return rawService.hydrate({ ...result, kind } as SearchResultV1, context);
+    },
+  };
   return {
-    task: byKind.task,
-    memory: byKind.memory,
-    prompt: byKind.prompt,
+    task: requiredDomain(domains, 'task'),
+    memory: requiredDomain(domains, 'memory'),
+    prompt: requiredDomain(domains, 'prompt'),
     service,
     semantic,
     materialization,
     search: (request, context) => service.search(request, context),
-  };
-}
-
-function callbacksFor(
-  db: D1DatabaseLike,
-  installationId: string,
-  kind: WorkshopSearchSourceKind,
-): ExternalSearchProducerCallbacksV1 {
-  return {
-    enumerateLegacyCurrent: ({ cursor, limit }) =>
-      enumerate(db, installationId, kind, cursor, limit),
-    loadCurrent: ({ sourceId, expectedSourceRevision }) =>
-      load(db, installationId, kind, sourceId, expectedSourceRevision),
-    projectCurrent: ({ source, authorization }) =>
-      project(kind, source, authorization),
-    authorizeCurrentReference: async (authority, input) => {
-      assertAuthority(authority);
-      const source = await load(
-        db,
-        installationId,
-        kind,
-        input.sourceId,
-        input.sourceRevision,
-      );
-      if (!source || source.sourcePolicyRevision !== input.sourcePolicyRevision)
-        throw denied();
-      return authorizationOf(source);
-    },
-    hydrateCurrentReference: async (authority, input) => {
-      assertAuthority(authority);
-      const source = await load(
-        db,
-        installationId,
-        kind,
-        input.sourceId,
-        input.sourceRevision,
-      );
-      if (!source || source.sourcePolicyRevision !== input.sourcePolicyRevision)
-        throw denied();
-      return source.canonical;
-    },
   };
 }
 
@@ -246,19 +317,22 @@ async function enumerate(
   cursor: string | null,
   limit: number,
 ): Promise<{ sourceIds: readonly string[]; nextCursor: string | null }> {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw denied();
-  const after = cursor ?? '';
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+    throw new WorkshopError(
+      'validation_failed',
+      'Search page limit is invalid',
+    );
   const table = tableFor(kind);
   const id = idColumnFor(kind);
-  const deleted = kind === 'task' ? '1 = 1' : 'deleted_at IS NULL';
+  const live = kind === 'task' ? '1 = 1' : 'deleted_at IS NULL';
   const rows = await db
     .prepare(
       `SELECT ${id} AS id FROM ${table}
-       WHERE installation_id = ? AND ${id} > ? AND ${deleted}
+       WHERE installation_id = ? AND ${id} > ? AND ${live}
          AND visibility_scope IS NOT NULL AND authorization_revision IS NOT NULL
        ORDER BY ${id} ASC LIMIT ?`,
     )
-    .bind(installationId, after, limit + 1)
+    .bind(installationId, cursor ?? '', limit + 1)
     .all<{ id: string }>();
   const visible = rows.results.slice(0, limit);
   return {
@@ -273,261 +347,140 @@ async function load(
   installationId: string,
   kind: WorkshopSearchSourceKind,
   sourceId: string,
-  expectedSourceRevision: string | null,
-): Promise<ExternalSearchLoadedSourceV1 | null> {
-  if (typeof sourceId !== 'string' || sourceId.length === 0) throw denied();
+  expectedRevision: string | null,
+): Promise<ProducerSource | null> {
   const table = tableFor(kind);
   const id = idColumnFor(kind);
-  const deleted = kind === 'task' ? '1 = 1' : 'deleted_at IS NULL';
+  const live = kind === 'task' ? '1 = 1' : 'deleted_at IS NULL';
   const row = await db
     .prepare(
       `SELECT * FROM ${table}
-       WHERE installation_id = ? AND ${id} = ? AND ${deleted}`,
+       WHERE installation_id = ? AND ${id} = ? AND ${live}`,
     )
     .bind(installationId, sourceId)
     .first<Record<string, unknown>>();
   if (!row) return null;
-  const revision = integer(row.revision, 'revision');
-  if (
-    expectedSourceRevision !== null &&
-    expectedSourceRevision !== String(revision)
-  )
+  const revision = integer(row.revision);
+  if (expectedRevision !== null && expectedRevision !== String(revision))
     return null;
-  const canonical = canonicalOf(kind, row);
   return {
     sourceId,
     sourceRevision: String(revision),
-    sourcePolicyRevision: integer(row.policy_revision, 'policy_revision'),
-    canonical,
-  };
-}
-
-function authorizationOf(
-  source: ExternalSearchLoadedSourceV1,
-): ExternalAuthorization {
-  const canonical = record(source.canonical);
-  return {
-    version: 1,
-    sourceId: source.sourceId,
-    sourceRevision: source.sourceRevision,
-    sourcePolicyRevision: source.sourcePolicyRevision,
-    workspaceId: nullableString(canonical.workspaceId),
-    ownerPrincipalId: string(canonical.ownerPrincipalId),
-    visibility: normalizeVisibilityScope(
-      canonical.visibility as VisibilityScopeV1,
-    ),
+    sourcePolicyRevision: integer(row.policy_revision),
+    canonical: canonicalRecord(kind, row),
   };
 }
 
 function project(
   kind: WorkshopSearchSourceKind,
-  source: ExternalSearchLoadedSourceV1,
-  authorization: ExternalAuthorization,
-): Promise<{
-  version: 1;
-  documents: Array<{
-    documentSlot: string;
-    canonicalReference: UnifiedSearchReferenceV1;
-    filterMetadata: UnifiedSearchFiltersV1;
-    text: string;
-    segments: SearchProjectionSegmentV1[];
-  }>;
-  replaceAll: true;
-  removeDocumentSlots: string[];
-}> {
+  source: ProducerSource,
+): ExternalProjectedSearchDocumentV1 {
   const canonical = record(source.canonical);
-  const language = optionalString(canonical.language) ?? 'en';
-  const fields: Array<[SearchProjectionFieldV1, string]> = [];
-  let filters: UnifiedSearchFiltersV1 = emptyFilters(language);
-  let reference: UnifiedSearchReferenceV1;
-  if (kind === 'task') {
-    reference = { kind, taskId: source.sourceId };
-    push(fields, 'title', canonical.title);
-    push(fields, 'description', canonical.objective);
-    push(fields, 'description', canonical.description);
-    push(fields, 'prompt', canonical.prompt);
-    push(fields, 'description', stringify(canonical.constraints));
-    push(fields, 'description', stringify(canonical.acceptanceCriteria));
-    push(fields, 'description', stringify(canonical.relationships));
-    const status = canonical.archivedAt
-      ? 'archived'
-      : canonical.completedAt
-        ? 'completed'
-        : canonical.claimed === true
-          ? 'claimed'
-          : 'unclaimed';
-    push(fields, 'status', status);
-    push(fields, 'content', canonical.assignedPrincipalId);
-    push(fields, 'result', canonical.outcome);
-    filters = {
-      ...filters,
-      byKind: { task: { statuses: [status] } },
-    };
-  } else if (kind === 'memory') {
-    reference = { kind, memoryId: source.sourceId };
-    push(fields, 'title', canonical.title);
-    push(fields, 'description', canonical.description);
-    push(fields, 'content', canonical.content);
-    push(fields, 'content', stringify(canonical.applicability));
-    push(fields, 'content', stringify(canonical.provenance));
-  } else {
-    reference = { kind, promptId: source.sourceId };
-    push(fields, 'title', canonical.name);
-    push(fields, 'title', canonical.title);
-    push(fields, 'prompt', canonical.promptText);
-    push(fields, 'content', canonical.scope);
-    push(fields, 'content', canonical.role);
-    push(fields, 'content', stringify(canonical.variables));
-    push(fields, 'status', canonical.active === true ? 'active' : 'inactive');
-    push(fields, 'content', String(canonical.priority));
-    push(fields, 'content', String(canonical.order));
-  }
-  const { text, segments } = combine(source.sourceId, language, fields);
-  if (text.length === 0) throw denied();
-  if (
-    authorization.sourceId !== source.sourceId ||
-    authorization.sourceRevision !== source.sourceRevision ||
-    authorization.sourcePolicyRevision !== source.sourcePolicyRevision
-  )
-    throw denied();
-  return Promise.resolve({
-    version: 1 as const,
-    documents: [
-      {
-        documentSlot: 'canonical',
-        canonicalReference: reference,
-        filterMetadata: filters,
-        text,
-        segments,
-      },
-    ],
-    replaceAll: true as const,
-    removeDocumentSlots: [],
-  });
-}
-
-function canonicalOf(
-  kind: WorkshopSearchSourceKind,
-  row: Record<string, unknown>,
-) {
-  const shared = {
-    id: string(row[idColumnFor(kind)]),
-    revision: integer(row.revision, 'revision'),
-    policyRevision: integer(row.policy_revision, 'policy_revision'),
-    language: string(row.language),
-    attribution: json(row.attribution_json),
-    installationId: string(row.installation_id),
-    ownerPrincipalId: string(row.owner_principal_id),
-    workspaceId: string(row.workspace_id),
-    visibility: visibility(row.visibility_scope),
-    authorizationRevision: integer(
-      row.authorization_revision,
-      'authorization_revision',
-    ),
-    createdAt: string(row.created_at),
-    updatedAt: string(row.updated_at),
-  };
-  if (kind === 'task')
-    return {
-      ...shared,
-      title: string(row.title),
-      ...(optionalString(row.objective)
-        ? { objective: optionalString(row.objective) }
-        : {}),
-      description: string(row.description),
-      constraints: json(row.constraints_json),
-      acceptanceCriteria: json(row.acceptance_criteria_json),
-      relationships: json(row.relationships_json),
-      ...(optionalString(row.role) ? { role: optionalString(row.role) } : {}),
-      prompt: string(row.prompt),
-      claimed: integer(row.claimed, 'claimed') === 1,
-      ...(optionalString(row.claimed_at)
-        ? { claimedAt: normalizeDate(string(row.claimed_at)) }
-        : {}),
-      ...(optionalString(row.completed_at)
-        ? { completedAt: normalizeDate(string(row.completed_at)) }
-        : {}),
-      ...(optionalString(row.archived_at)
-        ? { archivedAt: normalizeDate(string(row.archived_at)) }
-        : {}),
-      ...(optionalString(row.assigned_principal_id)
-        ? { assignedPrincipalId: optionalString(row.assigned_principal_id) }
-        : {}),
-      ...(optionalString(row.result)
-        ? { result: optionalString(row.result) }
-        : {}),
-      ...(optionalString(row.outcome_kind)
-        ? { outcomeKind: optionalString(row.outcome_kind) }
-        : {}),
-      memorySlugs: json(row.memory_slugs),
-      contextQueries: json(row.context_queries),
-    };
-  if (kind === 'memory') {
-    const { id, ...memoryShared } = shared;
-    return {
-      ...memoryShared,
-      slug: id,
-      title: string(row.title),
-      description: string(row.description),
-      content: string(row.content),
-      applicability: json(row.applicability_json),
-      provenance: json(row.provenance_json),
-    };
-  }
+  const fields =
+    kind === 'task'
+      ? ['title', 'objective', 'description', 'prompt', 'result']
+      : kind === 'memory'
+        ? ['title', 'description', 'content']
+        : ['name', 'title', 'promptText', 'scope', 'role'];
+  const text = fields
+    .map((field) => canonical[field])
+    .filter((value): value is string => typeof value === 'string' && !!value)
+    .join(' ')
+    // Taproot external projections are tokens: authored line breaks and other
+    // control characters must not cross the producer boundary.
+    .replace(/[\u0000-\u001f\u007f]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!text)
+    throw new WorkshopError('validation_failed', 'Source is not searchable');
   return {
-    ...shared,
-    name: string(row.name),
-    title: string(row.title),
-    promptText: string(row.prompt_text),
-    ...(optionalString(row.scope) ? { scope: optionalString(row.scope) } : {}),
-    ...(optionalString(row.role) ? { role: optionalString(row.role) } : {}),
-    variables: json(row.variables_json),
-    active: integer(row.active, 'active') === 1,
-    priority: integer(row.priority, 'priority'),
-    order: integer(row.sort_order, 'sort_order'),
-    ...(optionalString(row.deactivated_at)
-      ? { deactivatedAt: optionalString(row.deactivated_at) }
+    text,
+    ...(typeof canonical.title === 'string'
+      ? { title: canonical.title }
+      : typeof canonical.name === 'string'
+        ? { title: canonical.name }
+        : {}),
+    ...(typeof canonical.language === 'string'
+      ? { language: canonical.language }
       : {}),
   };
 }
 
-function combine(
-  sourceId: string,
-  language: string,
-  fields: readonly [SearchProjectionFieldV1, string][],
-): { text: string; segments: SearchProjectionSegmentV1[] } {
-  let text = '';
-  const segments: SearchProjectionSegmentV1[] = [];
-  for (const [field, value] of fields) {
-    if (text) text += '\n';
-    const start = text.length;
-    text += value;
-    segments.push({
-      field,
-      sourceId,
-      language,
-      text: value,
-      documentStart: start,
-      documentEnd: text.length,
-    });
-  }
-  return { text, segments };
+function authorizeSource(
+  source: ProducerSource,
+  context: AuthorizationContext,
+): void {
+  const canonical = record(source.canonical);
+  authorizeRecord(
+    {
+      installationId: string(canonical.installationId),
+      visibility: normalizeVisibilityScope(
+        canonical.visibility as VisibilityScopeV1,
+      ),
+      authorizationRevision: integer(canonical.authorizationRevision),
+    },
+    context,
+  );
 }
 
-function emptyFilters(language: string): UnifiedSearchFiltersV1 {
+function requiredDomainKind(
+  domains: Map<WorkshopSearchSourceKind, ExternalSearchKind>,
+  kind: WorkshopSearchSourceKind,
+): ExternalSearchKind {
+  const domain = requiredDomain(domains, kind);
+  return domain;
+}
+
+function canonicalRecord(
+  kind: WorkshopSearchSourceKind,
+  row: Record<string, unknown>,
+): Record<string, unknown> {
+  const common = {
+    installationId: row.installation_id,
+    ownerPrincipalId: row.owner_principal_id,
+    workspaceId: row.workspace_id,
+    visibility: json(row.visibility_scope),
+    authorizationRevision: row.authorization_revision,
+    revision: row.revision,
+    policyRevision: row.policy_revision,
+    language: row.language,
+  };
+  if (kind === 'task')
+    return {
+      ...common,
+      id: row.id,
+      title: row.title,
+      objective: row.objective,
+      description: row.description,
+      prompt: row.prompt,
+      result: row.result,
+    };
+  if (kind === 'memory')
+    return {
+      ...common,
+      slug: row.slug,
+      title: row.title,
+      description: row.description,
+      content: row.content,
+    };
   return {
-    languages: [language],
-    sourceRevisions: [],
-    byKind: {},
+    ...common,
+    id: row.id,
+    name: row.name,
+    title: row.title,
+    promptText: row.prompt_text,
+    scope: row.scope,
+    role: row.role,
   };
 }
 
-function push(
-  fields: Array<[SearchProjectionFieldV1, string]>,
-  field: SearchProjectionFieldV1,
-  value: unknown,
-): void {
-  if (typeof value === 'string' && value.trim()) fields.push([field, value]);
+function requiredDomain<T>(
+  domains: Map<WorkshopSearchSourceKind, T>,
+  kind: WorkshopSearchSourceKind,
+): T {
+  const domain = domains.get(kind);
+  if (!domain) throw new Error(`Missing Workshop ${kind} search domain`);
+  return domain;
 }
 
 function tableFor(kind: WorkshopSearchSourceKind): string {
@@ -539,15 +492,7 @@ function tableFor(kind: WorkshopSearchSourceKind): string {
 }
 
 function idColumnFor(kind: WorkshopSearchSourceKind): string {
-  return kind === 'task' ? 'id' : kind === 'memory' ? 'slug' : 'id';
-}
-
-function capabilityFor(kind: WorkshopSearchSourceKind): string {
-  return kind === 'task'
-    ? 'task-write'
-    : kind === 'memory'
-      ? 'memory-write'
-      : 'prompt-write';
+  return kind === 'memory' ? 'slug' : 'id';
 }
 
 function changeClassesFor(kind: WorkshopSearchSourceKind): readonly string[] {
@@ -561,63 +506,31 @@ function changeClassesFor(kind: WorkshopSearchSourceKind): readonly string[] {
   ];
 }
 
-function normalizeDate(value: string): string {
-  return new Date(
-    value.includes('T') ? value : `${value.replace(' ', 'T')}Z`,
-  ).toISOString();
+function integer(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number))
+    throw new WorkshopError('internal_error', 'Invalid canonical integer');
+  return number;
 }
 
-function visibility(value: unknown): VisibilityScopeV1 {
-  const parsed = json(value);
-  const normalized = normalizeVisibilityScope(parsed as VisibilityScopeV1);
-  if (serializeVisibilityScope(normalized) !== String(value)) throw denied();
-  return normalized;
+function string(value: unknown): string {
+  if (typeof value !== 'string' || !value)
+    throw new WorkshopError('internal_error', 'Invalid canonical string');
+  return value;
 }
 
 function json(value: unknown): unknown {
-  if (typeof value !== 'string') throw denied();
+  if (typeof value !== 'string')
+    throw new WorkshopError('internal_error', 'Invalid canonical JSON');
   try {
     return JSON.parse(value);
   } catch {
-    throw denied();
+    throw new WorkshopError('internal_error', 'Invalid canonical JSON');
   }
 }
 
 function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw denied();
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new WorkshopError('internal_error', 'Invalid canonical record');
   return value as Record<string, unknown>;
-}
-
-function string(value: unknown): string {
-  if (typeof value !== 'string' || !value) throw denied();
-  return value;
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value : undefined;
-}
-
-function nullableString(value: unknown): string | null {
-  return value === null || value === undefined ? null : string(value);
-}
-
-function integer(value: unknown, field: string): number {
-  const number = Number(value);
-  if (!Number.isSafeInteger(number))
-    throw new WorkshopError('internal_error', `Invalid canonical ${field}`);
-  return number;
-}
-
-function stringify(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
-}
-
-function assertAuthority(value: { readonly kind: string }): void {
-  if (value.kind !== 'taproot-external-search-domain-policy-authority-v1')
-    throw denied();
-}
-
-function denied(): WorkshopError {
-  return new WorkshopError('forbidden', 'Authorization denied');
 }

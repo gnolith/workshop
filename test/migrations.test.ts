@@ -4,6 +4,12 @@ import { Miniflare } from 'miniflare';
 import { describe, expect, it } from 'vitest';
 import { workshopPackage } from '../src/index.js';
 import {
+  adoptWorkshopLegacyOwnerV042,
+  createWorkshopLegacyOwnerAdoptionHandleV1,
+  decodeWorkshopLegacyOwnerV042,
+  type WorkshopLegacyV042Attestation,
+} from '../src/backup.js';
+import {
   applyWorkshopMigrations,
   WORKSHOP_SCHEMA_VERSION,
   workshopMigrations,
@@ -33,13 +39,24 @@ describe('migration artifact integrity', () => {
     const packageManifest = JSON.parse(
       readFileSync('package.json', 'utf8'),
     ) as { version?: unknown };
-    expect(packageManifest.version).toBe('0.4.2');
+    expect(packageManifest.version).toBe('0.5.0');
     expect(workshopPackage.version).toBe(packageManifest.version);
     expect(
       workshopMigrations
         .filter(({ id }) => id !== '0001_workshop')
         .map(({ sql }) => sql.includes("package_version = '0.2.2'")),
-    ).toEqual([true, true, false, false, false]);
+    ).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
     expect(workshopMigrations[3]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[4]!.sql).toContain("package_version = '0.3.0'");
     expect(workshopMigrations[5]!.sql).toContain("package_version = '0.4.0'");
@@ -68,6 +85,145 @@ describe('migration artifact integrity', () => {
         version: WORKSHOP_SCHEMA_VERSION,
         applied: [],
       });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('decodes and adopts exact 0.4.2 owner state through read-only bounded capabilities', async () => {
+    const fixture = await database();
+    try {
+      for (const migration of workshopMigrations.slice(0, 6))
+        await execute(fixture.db, migration.sql);
+      await fixture.db
+        .prepare(
+          `INSERT INTO workshop_tasks
+           (id, description, prompt, context_queries, memory_slugs, claimed,
+            installation_id, owner_principal_id, workspace_id,
+            visibility_scope, authorization_revision, title, objective,
+            constraints_json, acceptance_criteria_json, relationships_json,
+            outcome_kind, language, attribution_json, policy_revision,
+            revision, created_at, updated_at)
+           VALUES (?, ?, ?, '[]', '[]', 0, ?, ?, ?, '{}', 1, ?, ?, '[]', '[]',
+                   '[]', NULL, 'en', '{}', 1, 1, ?, ?)`,
+        )
+        .bind(
+          'legacy-owner-task',
+          'Legacy owner task',
+          'Adopt safely',
+          'installation:legacy',
+          'principal:legacy',
+          'workspace:legacy',
+          'Legacy owner task',
+          'Adopt safely',
+          '2026-07-23T12:00:00.000Z',
+          '2026-07-23T12:00:00.000Z',
+        )
+        .run();
+      const queries: string[] = [];
+      const source = {
+        prepare(sql: string) {
+          queries.push(sql);
+          if (!/^\s*(?:SELECT|PRAGMA)\b/iu.test(sql))
+            throw new Error('legacy decoder attempted a source mutation');
+          return fixture.db.prepare(sql);
+        },
+      };
+      const attestation = {
+        packageName: '@gnolith/workshop',
+        packageVersion: '0.4.2',
+        schemaVersion: 6,
+        migrationLedger: {
+          namespace: '@gnolith/workshop',
+          migrations: workshopMigrations
+            .slice(0, 6)
+            .map(({ id, checksum }) => ({ id, checksum })),
+        },
+      } satisfies WorkshopLegacyV042Attestation;
+      const decoded = await decodeWorkshopLegacyOwnerV042(source, attestation, {
+        maxRows: 100,
+        maxBytes: 1_000_000,
+      });
+      expect(decoded.counts).toEqual({
+        tasks: 1,
+        memories: 0,
+        prompts: 0,
+        revisions: 0,
+      });
+      expect(decoded.tableCounts.workshop_tasks).toBe(1);
+      expect(decoded.digests.ownerFragment).toMatch(/^sha256:[a-f0-9]{64}$/u);
+      expect(decoded.migrationLedger.namespace).toBe('@gnolith/workshop');
+      expect(
+        queries.every((sql) => !/\b(?:INSERT|UPDATE|DELETE)\b/iu.test(sql)),
+      ).toBe(true);
+
+      const adopted: Array<Record<string, unknown>> = [];
+      await expect(
+        adoptWorkshopLegacyOwnerV042(
+          decoded,
+          {
+            owner: '@gnolith/workshop',
+            connectionId: 'connection:test',
+            registrationFingerprint: 'a'.repeat(64),
+            async adoptLegacyOwnerV042(input) {
+              adopted.push(input);
+            },
+          },
+          'installation:target',
+          { clock: () => new Date('2026-07-23T13:00:00.000Z') },
+        ),
+      ).resolves.toMatchObject({
+        format: 'gnolith-workshop-legacy-owner-adoption-v1',
+        installationId: 'installation:target',
+        adoptedAt: '2026-07-23T13:00:00.000Z',
+      });
+      expect(adopted[0]).toMatchObject({
+        installationId: 'installation:target',
+        expireClaimsAt: '2026-07-23T13:00:00.000Z',
+        sourceDigest: decoded.digests.ownerFragment,
+      });
+      const destination = await database();
+      try {
+        await applyWorkshopMigrations(destination.db, testLedger);
+        const handle = createWorkshopLegacyOwnerAdoptionHandleV1(
+          destination.db,
+          {
+            connectionId: 'connection:destination',
+            registrationFingerprint: 'b'.repeat(64),
+          },
+        );
+        await expect(
+          adoptWorkshopLegacyOwnerV042(decoded, handle, 'installation:target', {
+            clock: () => new Date('2026-07-23T13:00:00.000Z'),
+          }),
+        ).resolves.toMatchObject({ installationId: 'installation:target' });
+        await expect(
+          destination.db
+            .prepare(
+              `SELECT installation_id, claimed
+               FROM workshop_tasks WHERE id = ?`,
+            )
+            .bind('legacy-owner-task')
+            .first(),
+        ).resolves.toMatchObject({
+          installation_id: 'installation:target',
+          claimed: 0,
+        });
+      } finally {
+        await destination.dispose();
+      }
+      await expect(
+        adoptWorkshopLegacyOwnerV042(
+          { ...decoded },
+          {
+            owner: '@gnolith/workshop',
+            connectionId: 'connection:test',
+            registrationFingerprint: 'a'.repeat(64),
+            async adoptLegacyOwnerV042() {},
+          },
+          'installation:target',
+        ),
+      ).rejects.toThrow(/not verified/u);
     } finally {
       await fixture.dispose();
     }

@@ -1,0 +1,24 @@
+{
+  "format": "gnolith-legacy-operation-names-v1",
+  "names": {
+    "add_alias": "mutate_entity",
+    "add_reference": "mutate_entity",
+    "add_sitelink": "mutate_entity",
+    "add_statement": "mutate_entity",
+    "add_qualifier": "mutate_entity",
+    "create_entity": "create_item or create_property",
+    "delete_alias": "mutate_entity",
+    "delete_reference": "mutate_entity",
+    "delete_sitelink": "mutate_entity",
+    "delete_statement": "mutate_entity",
+    "delete_qualifier": "mutate_entity",
+    "dry_run_sparql": "query_sparql with dryRun=true",
+    "get_search_status": "search_admin with action=health",
+    "query_sparql_update": null,
+    "reset_abandoned_claim": null,
+    "search_status": "gnolith_status or search_admin with action=health",
+    "set_description": "mutate_entity",
+    "set_label": "mutate_entity",
+    "set_rank": "mutate_entity"
+  }
+}

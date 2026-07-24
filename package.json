@@ -1,7 +1,7 @@
 {
   "name": "@gnolith/workshop",
-  "version": "0.4.2",
-  "description": "Hosted agent tasks, memories, coordination, and tooling.",
+  "version": "0.5.0",
+  "description": "Self-hosted Gnolith MCP and BFF executable.",
   "type": "module",
   "private": false,
   "sideEffects": false,
@@ -16,7 +16,7 @@
   "author": "Gnolith contributors",
   "keywords": [
     "agents",
-    "cloudflare-d1",
+    "sqlite",
     "mcp",
     "research",
     "sparql"
@@ -25,18 +25,21 @@
     "access": "public",
     "provenance": true
   },
+  "bin": {
+    "gnolith-workshop": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./core": {
-      "types": "./dist/core.d.ts",
-      "import": "./dist/core.js"
-    },
     "./protocol": {
       "types": "./dist/protocol.d.ts",
       "import": "./dist/protocol.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
     },
     "./server": {
       "types": "./dist/server.d.ts",
@@ -46,23 +49,32 @@
       "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js"
     },
-    "./site": {
-      "types": "./dist/site.d.ts",
-      "import": "./dist/site.js"
+    "./executable": {
+      "types": "./dist/executable.d.ts",
+      "import": "./dist/executable.js"
     },
-    "./ui": {
-      "types": "./dist/ui.d.ts",
-      "import": "./dist/ui.js"
+    "./local-adapter": {
+      "types": "./dist/local-adapter.d.ts",
+      "import": "./dist/local-adapter.js"
+    },
+    "./bootstrap": {
+      "types": "./dist/bootstrap.d.ts",
+      "import": "./dist/bootstrap.js"
+    },
+    "./backup": {
+      "types": "./dist/backup.d.ts",
+      "import": "./dist/backup.js"
     },
     "./migrations": {
       "types": "./dist/migrations.d.ts",
       "import": "./dist/migrations.js"
     },
-    "./styles.css": "./dist/styles.css",
+    "./schemas/*": "./schemas/*",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "schemas",
     "docs",
     "migrations",
     "CHANGELOG.md",
@@ -72,18 +84,16 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run performance:check && npm run parity:node-sqlite && npm run security:dev-check && npm run worker:check && npm run worker:test && npm run pack:check && npm run release:boundary-check && npm run consumer:check && npm run artifact:verify && npm run audit:check && npm run readiness:check",
+    "build": "node scripts/clean.mjs && node scripts/generate-operation-contract.mjs --check && tsc -p tsconfig.build.json",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run pack:check && npm run audit:check",
     "artifact:path": "node scripts/artifact-path.mjs",
     "artifact:prepare": "node scripts/prepare-artifact.mjs",
     "artifact:verify": "node scripts/verify-artifact.mjs",
     "audit:check": "npm audit --omit=dev --audit-level=high",
-    "consumer:check": "node scripts/consumer-smoke.mjs && npm run consumer:waystone-check",
-    "consumer:waystone-check": "node scripts/waystone-consumer-smoke.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint src test scripts",
-    "pack:check": "npm run artifact:prepare",
+    "pack:check": "npm pack --dry-run --json",
     "performance:check": "node scripts/performance-check.mjs",
     "parity:node-sqlite": "node scripts/node-sqlite-parity.mjs",
     "prepack": "npm run build",
@@ -95,8 +105,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "worker:check": "wrangler deploy --dry-run --config examples/package-runtime-canary/wrangler.jsonc --outdir ../../.wrangler/package-runtime-canary",
-    "worker:test": "node scripts/worker-e2e.mjs"
+    "candidate:prepare": "node scripts/prepare-candidate.mjs",
+    "packed:process-check": "node scripts/packed-process-smoke.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -104,13 +114,11 @@
   "packageManager": "npm@11.9.0",
   "dependencies": {
     "@traqula/parser-sparql-1-1": "^1.1.8",
-    "swr": "^2.4.2"
+    "ajv": "^8.17.1"
   },
   "peerDependencies": {
-    "@gnolith/diamond": ">=0.4.0 <0.5.0",
-    "@gnolith/taproot": ">=0.4.0 <0.5.0",
-    "@gnolith/waystone": ">=0.1.0 <0.3.0",
-    "react": ">=19 <20"
+    "@gnolith/diamond": ">=0.5.0-0 <0.6.0",
+    "@gnolith/taproot": ">=0.5.0-0 <0.6.0"
   },
   "peerDependenciesMeta": {
     "@gnolith/diamond": {
@@ -118,50 +126,33 @@
     },
     "@gnolith/taproot": {
       "optional": true
-    },
-    "@gnolith/waystone": {
-      "optional": true
-    },
-    "react": {
-      "optional": true
     }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@gnolith/diamond": "0.4.0",
-    "@gnolith/taproot": "0.4.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
+    "@gnolith/diamond": "file:../diamond/gnolith-diamond-0.5.0.tgz",
+    "@gnolith/taproot": "file:../taproot-artifacts/gnolith-taproot-0.5.0.tgz",
     "@types/node": "^24.0.0",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-v8": "^3.2.7",
-    "ajv": "^8.17.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "ajv-formats": "^3.0.1",
-    "axe-core": "^4.11.0",
     "eslint": "^10.7.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "jsdom": "^29.1.1",
     "miniflare": "^4.20260714.0",
     "prettier": "^3.9.5",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
     "tar-stream": "^3.1.7",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^3.2.4",
-    "wrangler": "^4.112.0"
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
+    "brace-expansion": "5.0.8",
     "sharp": "0.35.3"
   },
   "license": "MIT",
-  "main": "eslint.config.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "directories": {
     "doc": "docs",
-    "example": "examples",
     "test": "test"
   }
 }

@@ -16,7 +16,7 @@ const releasePolicy = await readFile(
 );
 const workflowSha256 = createHash('sha256').update(workflow).digest('hex');
 const expectedWorkflowSha256 =
-  '9177c8dbf0a75c85e79389f24390c0d83bdad8937a763ca1fa661ac3064f1315';
+  '7c3e6bfe5e9697fc2122dcc29d39387f2d78a224178471ab530ec04dec8e48de';
 
 const build = job('build-and-verify', 'publish');
 const publish = job('publish', 'publish-release');

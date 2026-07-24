@@ -1,4 +1,4 @@
-/** Host-authenticated identity. This is the exact Taproot 0.3 authorization shape. */
+/** Host-authenticated identity supplied through Taproot's public authorization port. */
 export interface AuthorizationContext {
   installationId: string;
   principalId: string;

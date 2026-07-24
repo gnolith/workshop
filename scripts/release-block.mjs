@@ -12,6 +12,26 @@ const predicateType = 'https://slsa.dev/provenance/v1';
 const sourceCommit = '819fe054ebb867e1ca92518bfd3b1aa6c5aa277d';
 const exactIntegrity =
   'sha512-yYxbrUNnu74zBaxHoywGlgeG2LFz4HMzi2RLcsq83/JVEIkwbWvWZ8tuLpxFYxTAgTXG1/FHddgEJStRupe54A==';
+const candidateVersion = '0.5.0';
+const candidateIntegrity =
+  'sha512-uVA0FBUyQA3SwNGtxk93mHeoZibzzddHvbmSJ8krZKWekLbHSGNDtYBCmtPTpMZPhlrWMJYYBO+7NjpFy1Tkbg==';
+
+export function verifyInstalledTaprootCandidate() {
+  const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+  const locked = lock.packages?.['node_modules/@gnolith/taproot'];
+  const installed = JSON.parse(
+    readFileSync('node_modules/@gnolith/taproot/package.json', 'utf8'),
+  );
+  assert.equal(installed.name, packageName);
+  assert.equal(installed.version, candidateVersion);
+  assert.equal(locked?.version, candidateVersion);
+  assert.equal(locked?.integrity, candidateIntegrity);
+  return {
+    packageName,
+    version: candidateVersion,
+    integrity: candidateIntegrity,
+  };
+}
 
 export async function verifyTaprootRelease({
   fetchImpl = globalThis.fetch,
@@ -176,8 +196,8 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  const verified = await verifyTaprootRelease();
+  const verified = verifyInstalledTaprootCandidate();
   console.log(
-    `${verified.packageName} ${verified.version} public npm provenance verified`,
+    `${verified.packageName} ${verified.version} candidate integrity verified`,
   );
 }

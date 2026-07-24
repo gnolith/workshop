@@ -1,0 +1,50 @@
+{
+  "format": "gnolith-workshop-peer-artifacts-v1",
+  "version": 1,
+  "peers": [
+    {
+      "name": "diamond",
+      "destinationDirectory": "diamond",
+      "repository": "https://github.com/gnolith/diamond.git",
+      "commit": "e82f58ba8028ff9c16a34f4b8a9a2bc356495b64",
+      "tree": "a78bc6ccceda38a3a3db7b4cc8e4bd686e945a06",
+      "filename": "gnolith-diamond-0.5.0.tgz",
+      "bytes": 71762,
+      "sha256": "3ce5d33478667dc4ec9a8ae4b4c3e0a94c3bce61e741ba62511ab668d1c20228",
+      "integrity": "sha512-KrgOpBB640UoNjFMiDqN8DgB4VYBDbiKRtZ4bKKR4kETN3QzPU9hUBEyNXZsyLA2IbE4YlQka/GflrsP7aNU8g=="
+    },
+    {
+      "name": "taproot",
+      "destinationDirectory": "taproot-artifacts",
+      "repository": "https://github.com/gnolith/taproot.git",
+      "commit": "98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac",
+      "tree": "b3f11979405f1ecfca881367ce1ee40218d83d71",
+      "filename": "gnolith-taproot-0.5.0.tgz",
+      "bytes": 348272,
+      "sha1": "6a1e6d54293d57067ee37e3a3aae447e04127023",
+      "sha256": "030e0bc4b58873b1ba362cc7ea0a232b769fcd5163ce7679d397c47b8f15b818",
+      "integrity": "sha512-uVA0FBUyQA3SwNGtxk93mHeoZibzzddHvbmSJ8krZKWekLbHSGNDtYBCmtPTpMZPhlrWMJYYBO+7NjpFy1Tkbg==",
+      "canonicalEvidence": {
+        "hostedRunId": "30130270744",
+        "hostedArtifactId": "8610844408",
+        "hostedArtifactName": "taproot-release-candidate-98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac",
+        "expiresAt": "2026-10-22",
+        "sbom": {
+          "filename": "gnolith-taproot-0.5.0.cdx.json",
+          "bytes": 734126,
+          "sha256": "cee47a765e917037ce0c3d0c28e481d0a48c204f729e9a28dff730df6bf5f3fc"
+        },
+        "provenance": {
+          "filename": "gnolith-taproot-0.5.0.provenance.json",
+          "bytes": 1150,
+          "sha256": "678f76bbef3433ba9b7f206052af68575033334c05c28cc7413d6fb68f8915fa"
+        },
+        "inventory": {
+          "filename": "SHA256SUMS",
+          "bytes": 293,
+          "sha256": "116e33d84b5bf8578e46d8c106cf3c4ffa33b8346368d504c6114e6a532e189b"
+        }
+      }
+    }
+  ]
+}

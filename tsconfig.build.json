@@ -8,6 +8,22 @@
     "sourceMap": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": [
+    "src/index.ts",
+    "src/client.ts",
+    "src/protocol.ts",
+    "src/mcp.ts",
+    "src/server.ts",
+    "src/migrations.ts",
+    "src/bootstrap.ts",
+    "src/backup.ts",
+    "src/producers.ts",
+    "src/operations.ts",
+    "src/executable.ts",
+    "src/local-adapter.ts",
+    "src/local-dependencies.ts",
+    "src/cli.ts",
+    "src/generated/operations.ts"
+  ],
   "exclude": ["test"]
 }

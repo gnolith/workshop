@@ -1,0 +1,11 @@
+title = "Workshop secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known non-secret item idempotency fixture"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^item-subject-v1$''']
+paths = ['''(^|/)test/search\.integration\.test\.ts$''']

@@ -10,12 +10,14 @@ import {
   createTaprootHostWriteCapability,
   initializeTaproot,
 } from '@gnolith/taproot';
-import { createWorkshopMcpServer } from '../dist/mcp.js';
-import { workshopMigrations } from '../dist/migrations.js';
 import {
-  createWorkshopRuntime,
-  createWorkshopSearchIntegrationV1,
-} from '../dist/server.js';
+  CATALOG_DIGEST,
+  createGnolithMcpServer,
+  operationCatalog,
+} from '../dist/mcp.js';
+import { workshopMigrations } from '../dist/migrations.js';
+import { createWorkshopSearchIntegrationV1 } from '../dist/server.js';
+import { createWorkshopRuntime } from '../dist/server/context.js';
 
 const miniflare = new Miniflare({
   modules: true,
@@ -46,10 +48,10 @@ try {
     workspaceIds: ['performance:workspace'],
     capabilities: [
       'read',
-      'task-write',
-      'memory-write',
-      'prompt-write',
-      'knowledge-write',
+      'task:write',
+      'memory:write',
+      'prompt:write',
+      'knowledge:write',
       'search:admin',
       'admin',
     ],
@@ -136,7 +138,17 @@ try {
     },
     authorizationContext,
   );
-  const mcp = createWorkshopMcpServer(runtime);
+  const mcp = createGnolithMcpServer({
+    version: '0.5.0',
+    operations: {
+      catalog: operationCatalog,
+      catalogDigest: CATALOG_DIGEST,
+      async call() {
+        throw new Error('The performance harness does not dispatch tools');
+      },
+    },
+    authenticate: async () => authorizationContext,
+  });
   const mcpRequest = (id, method) =>
     new Request('https://performance.example/mcp', {
       method: 'POST',
@@ -183,15 +195,20 @@ try {
   for (const [name, value] of Object.entries(metrics)) {
     assert.ok(value < 2_000, `${name} exceeded the 2s local regression bound`);
   }
-  const uiFiles = readdirSync('dist/ui', {
+  const runtimeFiles = readdirSync('dist', {
     recursive: true,
     withFileTypes: true,
   })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
     .map((entry) => readFileSync(`${entry.parentPath}/${entry.name}`));
-  const uiBytes = uiFiles.reduce((sum, file) => sum + file.byteLength, 0);
-  const uiGzipBytes = gzipSync(Buffer.concat(uiFiles)).byteLength;
-  console.log(JSON.stringify({ ...metrics, uiBytes, uiGzipBytes }));
+  const runtimeJsBytes = runtimeFiles.reduce(
+    (sum, file) => sum + file.byteLength,
+    0,
+  );
+  const runtimeJsGzipBytes = gzipSync(Buffer.concat(runtimeFiles)).byteLength;
+  console.log(
+    JSON.stringify({ ...metrics, runtimeJsBytes, runtimeJsGzipBytes }),
+  );
 } finally {
   await miniflare.dispose();
 }

@@ -1,209 +1,121 @@
-# Workshop
+# @gnolith/workshop
 
-`@gnolith/workshop` is Gnolith's agent-facing operating layer: durable research
-tasks, ephemeral task packets, reusable memories, canonical prompts,
-authorization-aware unified search and graph access, Taproot-backed knowledge
-tools, Streamable HTTP MCP, Worker route factories, and the Workshop Waystone UI.
+Workshop 0.5 is the self-hosted Gnolith executable. It owns one HTTP listener,
+the authenticated `/mcp` endpoint, authenticated `/health/ready`, live
+`/health/live`, and the `/api/v1/operations/*` BFF.
 
-One Codex Site is one research project. Workshop operates inside that Site-wide
-graph and task system; it does not add projects, memberships, agent sessions,
-packet snapshots, or a background coordinator.
+The release is intentionally headless. The former React UI, Site route
+factories, Worker runtime, stdio transport, and hand-written parallel tool
+catalog are not part of 0.5.
 
-## Runtime surfaces
-
-| Import                         | Runtime        | Purpose                                               |
-| ------------------------------ | -------------- | ----------------------------------------------------- |
-| `@gnolith/workshop`            | any            | Package identity and safe shared types                |
-| `@gnolith/workshop/core`       | any            | Process-local services and authorized tool dispatch   |
-| `@gnolith/workshop/protocol`   | browser/Worker | Models, errors, and injectable HTTP client            |
-| `@gnolith/workshop/server`     | Worker/process | Persistence services, health, and HTTP adapters       |
-| `@gnolith/workshop/mcp`        | any/Worker     | Neutral tool dispatcher and stateless HTTP MCP server |
-| `@gnolith/workshop/site`       | Worker         | Thin App Router-compatible route factories            |
-| `@gnolith/workshop/ui`         | browser        | React 19 components and `workshopPlugin`              |
-| `@gnolith/workshop/migrations` | installer      | Embedded canonical migration manifest                 |
-| `@gnolith/workshop/styles.css` | browser        | Workshop-specific styles                              |
-
-The root export intentionally does not import all runtimes.
-
-## Process-local integration
-
-Core services run directly in a process without HTTP, a UI, or a listening
-server. The host injects one structural SQLite persistence capability, the same
-live atomic authorization authority used by Taproot, an opaque cursor codec,
-and read-authorized knowledge/health adapters:
-
-```ts
-import { createWorkshopCore } from '@gnolith/workshop/core';
-import { createWorkshopSearchIntegrationV1 } from '@gnolith/workshop/server';
-
-const search = await createWorkshopSearchIntegrationV1({
-  db: persistence,
-  taproot,
-  hostCapability,
-  installationId,
-  registrationContext: principal,
-});
-
-const workshop = createWorkshopCore({
-  persistence,
-  authorization,
-  cursorCodec,
-  knowledge: { authorizedReader, health: taprootHealth },
-  diamondHealth,
-  search,
-});
-```
-
-Workshop owns its exact migrations and service behavior. Seedbed owns database
-paths, adapter lifecycle, stdio/CLI wiring, Docker, and package assembly.
-
-## Install
+## Executable
 
 ```sh
-npm install @gnolith/workshop @gnolith/diamond @gnolith/taproot react
+gnolith-workshop serve --config /run/gnolith/workshop.json
 ```
 
-Workshop targets Node.js 22+ for development and Web API runtimes. Its published
-package is checked in isolated Worker and vinext consumers without the Workers
-Node compatibility flag. Those consumers inject or stub peer services and do
-not represent a complete Gnolith Site.
+The JSON config uses format `gnolith-workshop-config-v1`, selects exactly one
+authentication profile (`local-bearer-v1` or `remote-oauth-v1`), declares an
+explicit listener profile, and points to an adapter module that supplies the
+Diamond and Taproot public ports. Startup is fail-closed: it does not apply
+migrations or bootstrap authorization.
 
-## Site integration
-
-Create the runtime once from host-provided D1, identity, Diamond, and Taproot
-services. Authentication belongs to the Site; role labels on tasks never grant
-permissions.
-
-```ts
-import { createWorkshopRuntime } from '@gnolith/workshop/server';
-
-export const workshop = createWorkshopRuntime({
-  db: env.DB,
-  authorization: siteAuthorization,
-  cursorCodec: siteCursorCodec,
-  knowledge: {
-    authorizedReader: createAuthorizedReader,
-    health: taprootHealth,
-  },
-  diamondHealth: siteDiamond.health,
-  resolvePrincipal: authenticateWorkshopRequest,
-  search: workshopSearch,
-});
-```
-
-`workshopSearch` is created once with `createWorkshopSearchIntegrationV1` after
-Taproot and Workshop migrations. The factory initializes Taproot's durable
-materialization state before registering the Task, Memory, and Prompt producers.
-All three domains commit the Workshop mutation, immutable revision snapshot,
-and canonical source event through Taproot's sealed atomic boundary. Legacy
-adoption and rebuilds are explicit bounded `search:admin` operations.
-
-`siteAuthorization` remains the single shared live source for authorized reads,
-backfill maintenance, and cursor snapshots. Host-issued guards must preserve
-exact capabilities and never add or translate them.
-`createAuthorizedReader` must return the public `AuthorizedTaprootReader` bound
-to that same source. Knowledge mutations are unavailable until that shared
-foundation is complete.
-
-Generated App Router files stay thin:
-
-```ts
-import { createWorkshopMcpHandler } from '@gnolith/workshop/site';
-import { workshop } from '@/lib/gnolith/server';
-
-const handler = createWorkshopMcpHandler(workshop);
-export const GET = handler;
-export const POST = handler;
-```
-
-Consumers apply migrations explicitly before constructing the runtime. Runtime
-construction never creates tables. `workshopMigrations` provides canonical SQL
-and checksums; `applyWorkshopMigrations(persistence)` applies only
-Workshop-owned schema through Diamond's shared namespaced checksum ledger when
-the host chooses to initialize or migrate.
-
-## Core behavior
-
-- Task creation validates every field, statically rejects SPARQL writes and
-  unsafe query forms, and verifies all memory references before inserting.
-- `claim_task` is one conditional SQLite update. Concurrent callers cannot both win.
-- Completion is one conditional update and accepts negative or inconclusive
-  nonempty results.
-- Task packets resolve authorized current memories on every read. Unscoped
-  context-query execution is disabled until the host supplies a scoped graph
-  boundary. Packet reads do not claim or mutate tasks.
-- Task, Memory, and Prompt histories are bounded newest-first canonical
-  snapshots. Each snapshot is authorized independently, and the exact current
-  record plus live installation authorization are rechecked immediately before
-  content returns.
-- Knowledge reads use Taproot's authorized-reader boundary. Mutations are
-  fail-closed and are not advertised by Workshop's MCP surface.
-- MCP authenticates every request and authorizes every tool server-side.
-- Detailed diagnostics require exact `admin`; abandoned-claim reset requires
-  exact `admin` plus `task-write`. Capabilities never imply one another. These
-  operations are not normal MCP tools.
-
-## Development
+Offline first-owner bootstrap never opens a socket:
 
 ```sh
-npm ci
-npm run check
+gnolith-workshop bootstrap-v1 \
+  --config /run/gnolith/workshop.json \
+  --installation-id installation:example \
+  --base-iri https://example.invalid/ \
+  --principal principal:owner \
+  --workspace workspace:default \
+  --credential-file /run/secrets/workshop-token \
+  --idempotency-key initial-owner-v1
 ```
 
-The gate covers formatting, lint, strict types, coverage, local D1 integration
-and concurrency, MCP, routes, interactive UI, build, performance, generic
-exact-tarball validation, isolated Worker and vinext package consumers, audit,
-readiness, and release-artifact invariants. One generated tarball and its
-machine-verifiable provenance are reused by every package consumer and release
-check. Peer services in the runtime consumers are injected or stubbed. See
-[`docs/release-provenance.md`](docs/release-provenance.md).
+The local bearer credential file must contain exactly 32 random bytes encoded
+as unpadded base64url, optionally followed by one LF. The token is never a
+command argument and only its domain-separated digest is persisted.
+Bootstrap requires Workshop schema version 11 and commits that credential digest
+plus an owner receipt through Taproot's sealed owner-adapter API.
+For `authorization_admin` `credential-register`, callers supply only the
+lowercase hexadecimal digest defined in the operation schema:
+`SHA-256(UTF-8("gnolith-local-bearer-v1\0") || base64urlDecode(token))`.
+`digestLocalBearerCredentialText` from `@gnolith/workshop/server` computes that
+value. The operation returns only credential ID metadata; plaintext bearer
+material is never returned, persisted, or written to administration audit data.
 
-Configure the Waystone contribution with a browser-only client. Construction is
-lazy, so importing the UI never initializes a server runtime or captures host
-bindings:
+Offline semantic configuration also runs before the listener:
 
-```tsx
-import { createWorkshopClient } from '@gnolith/workshop/protocol';
-import { createWorkshopPlugin } from '@gnolith/workshop/ui';
+```sh
+gnolith-workshop configure-semantics-v1 \
+  --config /run/gnolith/workshop.json \
+  --input /run/gnolith/semantic-configuration.json
+```
 
-export const workshopUi = createWorkshopPlugin({
-  client: () =>
-    createWorkshopClient({
-      baseUrl: '',
-      token: () => sessionToken(),
-    }),
-  capabilities: currentCapabilities,
-  loadMcpStatus: loadWorkshopMcpStatus,
+The input contains only declarative provider/vector identities and protected
+credential selector IDs. It never contains credential bytes. Configuration can
+be persisted while unavailable; `gnolith_status.semanticState.ready` becomes
+true only after the selected generation is actually ready, while lexical search
+remains available. `provider.endpoint` is the exact POST URL: an
+OpenAI-compatible endpoint ends in `/embeddings` (for example
+`https://provider.example/v1/embeddings`) and an Ollama-compatible endpoint
+ends in `/api/embed`. A configured but degraded semantic provider makes
+`/health/ready` return 503 without preventing the process from starting or
+serving lexical search.
+
+`gnolith_status.semanticState.diagnostic` is either `null` or the exact
+secret-safe `gnolith-workshop-semantic-diagnostic-v1` object. The versioned
+object reports only a bounded code, retryability, `sqlite|qdrant` backend, and
+the bounded `retry` repair class. It never includes URLs, credential selectors,
+paths, provider messages, or recursive causes. Exact downstream fixtures are
+published at `schemas/fixtures/workshop-status-evidence-v1.json`.
+
+Authorization visibility uses canonical CNF. The `clauses` array is ANDed,
+while atoms inside one clause are ORed. Owner-or-reader is one clause containing
+both principal atoms. Two singleton clauses mean owner-and-reader and are
+rejected when the administering principal cannot satisfy the resulting scope.
+
+Verified Waystone assets should use the exported `/app` mount recommendation.
+The root, `/mcp`, `/health`, `/api`, and `/.well-known` namespaces cannot be
+used or shadowed by an asset mount. The Node listener rejects encoded dot
+segments and encoded path separators before URL normalization.
+
+Local resource payload backup and restore use the public server-only factory:
+
+```ts
+import { createLocalFilesystemResourceBlobPortsV1 } from '@gnolith/workshop/backup';
+
+const blobs = await createLocalFilesystemResourceBlobPortsV1({
+  root: '/var/lib/gnolith/blobs',
 });
 ```
 
-Legacy onboarding journals remain quarantined and are not exposed by the
-public core, protocol, MCP, HTTP, or UI surfaces. A separately scoped reusable
-exploration skill will own future onboarding behavior.
+The returned `backup` and `restore` ports accept only Taproot descriptors,
+streams, stage IDs, and opaque reference IDs. Filesystem layout remains private
+to Workshop.
 
-`Workshop package handoff ready` means these package-owned gates pass against
-the exact tarball. It does not qualify a complete Gnolith Site. The Codex agent
-creating a Site owns four-package assembly, infrastructure and migrations,
-identity and secrets, deployment configuration, live browser/MCP/Codex probes,
-and final acceptance.
+Whole-owner restore uses `createWorkshopBackupApi` from the same export.
+Orchestrators pass the opaque document back to `importBackup`; Workshop
+canonicalizes logical records, atomically replaces only the bound
+installation's owner state, and rejects inconsistent duplicates.
 
-## Documentation
+## Protocol
 
-- [Architecture and domain semantics](docs/architecture.md)
-- [HTTP and client API](docs/http-api.md)
-- [MCP tools](docs/mcp.md)
-- [Authentication and authorization](docs/authentication.md)
-- [Migrations and upgrades](docs/migrations.md)
-- [Authorization foundation ledger](docs/authorization-foundation.md)
-- [Waystone UI](docs/ui-and-onboarding.md)
-- [Health and semantic verification](docs/verification.md)
-- [Operational limits](docs/limits.md)
-- [Security and threat assumptions](docs/security.md)
-- [Codex Sites compatibility](docs/codex-sites.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Release checklist and current evidence](docs/release-checklist.md)
-- [Package handoff contract](docs/package-handoff.md)
+The sole MCP identity is `gnolith`. The generated operation contract contains
+exactly 52 versioned operations and is checked into
+`schemas/gnolith-operations-v1.json`. The same generated registry drives MCP,
+the BFF, runtime validation, and the generic browser-safe client:
 
-## License
+```ts
+import { createWorkshopClient } from '@gnolith/workshop/client';
 
-MIT
+const client = createWorkshopClient({
+  baseOrigin: 'https://gnolith.example',
+  accessToken: async () => obtainAccessToken(),
+});
+const status = await client.call('gnolith_status', {});
+```
+
+See [the architecture-reset guide](docs/architecture-reset.md) for deployment,
+authentication, migration, lease, backup, and compatibility details.

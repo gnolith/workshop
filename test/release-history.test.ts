@@ -41,7 +41,7 @@ describe('release version history authority', () => {
       ref: 'refs/tags/v0.2.3',
       requireHead: true,
     });
-    expect(releaseRecovery.status).toBe(0);
+    expect(releaseRecovery.status, releaseRecovery.stderr).toBe(0);
 
     git(fixture, ['switch', '-c', 'agent/reuse-version']);
     writeJson(join(fixture, 'package-lock.json'), {

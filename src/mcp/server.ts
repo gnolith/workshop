@@ -1,21 +1,18 @@
-import { WorkshopError, normalizeWorkshopError } from '../protocol/errors.js';
-import type { WorkshopPrincipal } from '../protocol.js';
-import type { WorkshopRuntime } from '../server/context.js';
-import { resolveLimits } from '../server/limits.js';
-import { observeSafely } from '../server/observability.js';
 import {
-  createWorkshopToolDispatcher,
-  type WorkshopDispatchFailure,
-  type WorkshopToolDispatcher,
-} from './dispatcher.js';
-import type { WorkshopToolDefinition } from './tools.js';
+  operationCatalog,
+  type OperationName,
+} from '../generated/operations.js';
+import type { OperationRuntime } from '../operations.js';
+import { WorkshopError, normalizeWorkshopError } from '../protocol/errors.js';
+import type { AuthenticatedPrincipal } from '../protocol.js';
 
-export const WORKSHOP_MCP_PROTOCOL_VERSION = '2025-11-25';
+export const GNOLITH_MCP_PROTOCOL_VERSION = '2025-11-25';
 const SUPPORTED_PROTOCOLS = new Set([
-  WORKSHOP_MCP_PROTOCOL_VERSION,
+  GNOLITH_MCP_PROTOCOL_VERSION,
   '2025-06-18',
   '2025-03-26',
 ]);
+const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 
 type RequestId = string | number;
 
@@ -24,148 +21,133 @@ interface JsonRpcMessage {
   id?: RequestId | null;
   method?: string;
   params?: unknown;
-  result?: unknown;
-  error?: unknown;
 }
 
-export interface WorkshopMcpServer {
-  readonly tools: readonly WorkshopToolDefinition[];
+export interface GnolithMcpServerOptions {
+  version: string;
+  operations: OperationRuntime;
+  authenticate(request: Request): Promise<AuthenticatedPrincipal>;
+  allowedOrigins?: readonly string[];
+  maxRequestBytes?: number;
+  challenge?: string;
+}
+
+export interface GnolithMcpServer {
+  readonly tools: typeof operationCatalog;
   handle(request: Request): Promise<Response>;
 }
 
-export function createWorkshopMcpServer(
-  runtime: WorkshopRuntime,
-): WorkshopMcpServer {
-  const limits = resolveLimits(runtime.limits);
-  const dispatcher = createWorkshopToolDispatcher(runtime);
+export function createGnolithMcpServer(
+  options: GnolithMcpServerOptions,
+): GnolithMcpServer {
+  const origins = new Set(options.allowedOrigins ?? []);
+  const maxBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
   return {
-    tools: dispatcher.tools,
+    tools: operationCatalog,
     async handle(request) {
-      if (request.method === 'GET') {
-        return new Response('SSE listening is not enabled', {
-          status: 405,
-          headers: { allow: 'POST, OPTIONS' },
-        });
-      }
-      if (request.method === 'OPTIONS') return corsPreflight(request, runtime);
-      if (request.method !== 'POST') {
-        return new Response('Method not allowed', {
-          status: 405,
-          headers: { allow: 'GET, POST, OPTIONS' },
-        });
-      }
-      const originFailure = validateOrigin(request, runtime);
+      if (request.method === 'GET') return methodNotAllowed('POST, OPTIONS');
+      if (request.method === 'OPTIONS') return preflight(request, origins);
+      if (request.method !== 'POST') return methodNotAllowed('POST, OPTIONS');
+      const originFailure = validateOrigin(request, origins);
       if (originFailure) return originFailure;
       const contentType = request.headers.get('content-type')?.split(';', 1)[0];
-      if (contentType !== 'application/json') {
+      if (contentType !== 'application/json')
         return httpError(415, 'MCP requests require application/json');
-      }
       const accept = request.headers.get('accept') ?? '';
       if (
         !accept.includes('application/json') ||
         !accept.includes('text/event-stream')
-      ) {
+      )
         return httpError(
           406,
           'MCP requests must accept application/json and text/event-stream',
         );
+
+      let principal: AuthenticatedPrincipal;
+      try {
+        principal = await options.authenticate(request);
+      } catch {
+        return unauthenticated(options.challenge);
       }
+
       let message: JsonRpcMessage;
       try {
-        message = await readMessage(request, limits.maxMcpRequestBytes);
+        message = await readMessage(request, maxBytes);
       } catch (error) {
         const normalized = normalizeWorkshopError(error);
-        await observeSafely(runtime.observe, {
-          operation: 'authorization.failure',
-          outcome: 'error',
-          durationMs: 0,
-          errorCode: normalized.code,
-          ...(request.headers.get('x-request-id')
-            ? { requestId: request.headers.get('x-request-id')! }
-            : {}),
-        });
         return rpcResponse(
-          rpcError(null, -32700, normalized.message, normalized.toJSON()),
+          rpcError(null, -32700, normalized.message),
           normalized.status,
           request,
-          runtime,
+          origins,
         );
       }
       if (
         message.jsonrpc !== '2.0' ||
         typeof message.method !== 'string' ||
         Array.isArray(message)
-      ) {
+      )
         return rpcResponse(
           rpcError(message.id ?? null, -32600, 'Invalid JSON-RPC request'),
           400,
           request,
-          runtime,
+          origins,
         );
-      }
+      const protocol =
+        request.headers.get('mcp-protocol-version') ?? '2025-03-26';
       if (
         message.method !== 'initialize' &&
-        message.method !== 'notifications/initialized'
-      ) {
-        const protocol =
-          request.headers.get('mcp-protocol-version') ?? '2025-03-26';
-        if (!SUPPORTED_PROTOCOLS.has(protocol)) {
-          return httpError(400, 'Unsupported MCP protocol version');
-        }
-      }
-      let principal: WorkshopPrincipal | null;
-      try {
-        principal = await runtime.resolvePrincipal(request);
-        if (!principal) {
-          throw new WorkshopError(
-            'unauthenticated',
-            'MCP authentication is required',
-          );
-        }
-      } catch (error) {
-        const normalized = normalizeWorkshopError(error);
-        return rpcResponse(
-          rpcError(message.id ?? null, -32001, normalized.message),
-          normalized.status,
-          request,
-          runtime,
-        );
-      }
+        message.method !== 'notifications/initialized' &&
+        !SUPPORTED_PROTOCOLS.has(protocol)
+      )
+        return httpError(400, 'Unsupported MCP protocol version');
+
       if (message.id === undefined || message.id === null) {
         return new Response(null, {
           status: 202,
-          headers: corsHeaders(request, runtime),
+          headers: responseHeaders(request, origins),
         });
       }
+
       try {
-        const result = await dispatch(
-          runtime,
-          dispatcher,
-          principal,
-          message,
-          request,
-        );
+        const result = await dispatch(message, request, principal, options);
         return rpcResponse(
           { jsonrpc: '2.0', id: message.id, result },
           200,
           request,
-          runtime,
+          origins,
         );
       } catch (error) {
-        if (error instanceof ProtocolError) {
+        if (error instanceof ProtocolError)
           return rpcResponse(
             rpcError(message.id, error.rpcCode, error.message),
             200,
             request,
-            runtime,
+            origins,
           );
-        }
         const normalized = normalizeWorkshopError(error);
+        const operationFailure =
+          normalized.code === 'unauthenticated' ||
+          normalized.code === 'forbidden'
+            ? { code: -32001, message: normalized.message }
+            : {
+                code: -32603,
+                message:
+                  normalized.code === 'internal_error'
+                    ? 'Workshop operation failed'
+                    : normalized.message,
+                data: normalized.toJSON(),
+              };
         return rpcResponse(
-          rpcError(message.id, -32603, normalized.message),
+          rpcError(
+            message.id,
+            operationFailure.code,
+            operationFailure.message,
+            'data' in operationFailure ? operationFailure.data : undefined,
+          ),
           200,
           request,
-          runtime,
+          origins,
         );
       }
     },
@@ -173,11 +155,10 @@ export function createWorkshopMcpServer(
 }
 
 async function dispatch(
-  runtime: WorkshopRuntime,
-  dispatcher: WorkshopToolDispatcher,
-  principal: WorkshopPrincipal,
   message: JsonRpcMessage,
   request: Request,
+  principal: AuthenticatedPrincipal,
+  options: GnolithMcpServerOptions,
 ): Promise<unknown> {
   switch (message.method) {
     case 'initialize': {
@@ -185,69 +166,60 @@ async function dispatch(
       const requested =
         typeof params.protocolVersion === 'string'
           ? params.protocolVersion
-          : WORKSHOP_MCP_PROTOCOL_VERSION;
+          : GNOLITH_MCP_PROTOCOL_VERSION;
       return {
         protocolVersion: SUPPORTED_PROTOCOLS.has(requested)
           ? requested
-          : WORKSHOP_MCP_PROTOCOL_VERSION,
+          : GNOLITH_MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: '@gnolith/workshop', version: '0.4.2' },
+        serverInfo: { name: 'gnolith', version: options.version },
         instructions:
-          'Search existing tasks before creating overlapping work. Reading a task packet never claims it. All knowledge writes require the latest Taproot revision.',
+          'Gnolith exposes one authenticated operation catalog. Search before creating; use exact revisions and task lease tokens for mutations.',
       };
     }
     case 'ping':
       return {};
-    case 'tools/list': {
-      const listed = dispatcher.listTools(principal);
-      if (!listed.ok) throw dispatchFailure(listed.failure);
+    case 'tools/list':
       return {
-        tools: listed.value.map((tool) => ({
-          name: tool.name,
-          title: tool.title,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
+        tools: operationCatalog.map((definition) => ({
+          name: definition.name,
+          title: title(definition.name),
+          description: `${definition.name} v${definition.version}`,
+          inputSchema: definition.inputSchema,
+          annotations: {
+            readOnlyHint: definition.annotations.readOnly,
+            destructiveHint: definition.annotations.destructive,
+            idempotentHint: definition.annotations.idempotent,
+          },
         })),
       };
-    }
     case 'tools/call': {
       const params = asObject(message.params);
       const name = typeof params.name === 'string' ? params.name : '';
+      if (!operationCatalog.some((operation) => operation.name === name))
+        throw new ProtocolError(-32602, 'Unknown operation');
       const input =
         params.arguments === undefined ? {} : asObject(params.arguments);
       const requestId =
-        request.headers.get('x-request-id') ?? crypto.randomUUID();
-      const called = await dispatcher.callTool(
-        { name, arguments: input },
-        { principal, requestId, signal: request.signal },
+        boundedRequestId(request.headers.get('x-request-id')) ??
+        crypto.randomUUID();
+      const value = await options.operations.call(
+        name as OperationName,
+        input,
+        {
+          principal,
+          requestId,
+          signal: request.signal,
+        },
       );
-      if (!called.ok) {
-        if (called.failure.kind === 'unknown_tool') {
-          throw new ProtocolError(-32602, called.failure.error.message);
-        }
-        if (
-          called.failure.kind === 'unauthenticated' ||
-          called.failure.kind === 'forbidden'
-        ) {
-          throw dispatchFailure(called.failure);
-        }
-        return {
-          content: [{ type: 'text', text: called.failure.error.message }],
-          structuredContent: { error: called.failure.error },
-          isError: true,
-        };
-      }
       return {
-        content: [{ type: 'text', text: JSON.stringify(called.value) }],
-        structuredContent: toStructured(called.value),
+        content: [{ type: 'text', text: JSON.stringify(value) }],
+        structuredContent: toStructured(value),
         isError: false,
       };
     }
     default:
-      throw new ProtocolError(
-        -32601,
-        `Method ${message.method} is not supported`,
-      );
+      throw new ProtocolError(-32601, 'Method not supported');
   }
 }
 
@@ -256,9 +228,8 @@ async function readMessage(
   maxBytes: number,
 ): Promise<JsonRpcMessage> {
   const declared = Number(request.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new WorkshopError('limit_exceeded', 'MCP request is too large');
-  }
+  if (Number.isFinite(declared) && declared > maxBytes)
+    throw new WorkshopError('limit_exceeded', 'MCP request is too large', 413);
   if (!request.body)
     throw new WorkshopError('bad_request', 'Missing MCP request body');
   const reader = request.body.getReader();
@@ -270,7 +241,11 @@ async function readMessage(
     total += next.value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      throw new WorkshopError('limit_exceeded', 'MCP request is too large');
+      throw new WorkshopError(
+        'limit_exceeded',
+        'MCP request is too large',
+        413,
+      );
     }
     chunks.push(next.value);
   }
@@ -281,55 +256,34 @@ async function readMessage(
     offset += chunk.byteLength;
   }
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as JsonRpcMessage;
-  } catch {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (Array.isArray(parsed))
+      throw new WorkshopError(
+        'bad_request',
+        'Batched JSON-RPC is not supported',
+      );
+    return parsed as JsonRpcMessage;
+  } catch (error) {
+    if (error instanceof WorkshopError) throw error;
     throw new WorkshopError('bad_request', 'Invalid JSON request body');
   }
 }
 
 function validateOrigin(
   request: Request,
-  runtime: WorkshopRuntime,
+  origins: ReadonlySet<string>,
 ): Response | null {
   const origin = request.headers.get('origin');
   if (!origin) return null;
-  const allowed = resolveCorsOrigin(request, runtime);
-  if (origin !== new URL(request.url).origin && origin !== allowed) {
+  if (origin !== new URL(request.url).origin && !origins.has(origin))
     return httpError(403, 'Origin is not allowed');
-  }
   return null;
 }
 
-function resolveCorsOrigin(
-  request: Request,
-  runtime: WorkshopRuntime,
-): string | null {
-  return typeof runtime.corsOrigin === 'function'
-    ? runtime.corsOrigin(request)
-    : (runtime.corsOrigin ?? null);
-}
-
-function corsHeaders(request: Request, runtime: WorkshopRuntime): Headers {
-  const headers = new Headers({
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
-  });
-  const origin = request.headers.get('origin');
-  if (
-    origin &&
-    (origin === new URL(request.url).origin ||
-      origin === resolveCorsOrigin(request, runtime))
-  ) {
-    headers.set('access-control-allow-origin', origin);
-    headers.set('vary', 'Origin');
-  }
-  return headers;
-}
-
-function corsPreflight(request: Request, runtime: WorkshopRuntime): Response {
-  const failure = validateOrigin(request, runtime);
+function preflight(request: Request, origins: ReadonlySet<string>): Response {
+  const failure = validateOrigin(request, origins);
   if (failure) return failure;
-  const headers = corsHeaders(request, runtime);
+  const headers = responseHeaders(request, origins);
   headers.set('access-control-allow-methods', 'POST, OPTIONS');
   headers.set(
     'access-control-allow-headers',
@@ -338,19 +292,61 @@ function corsPreflight(request: Request, runtime: WorkshopRuntime): Response {
   return new Response(null, { status: 204, headers });
 }
 
+function responseHeaders(
+  request: Request,
+  origins: ReadonlySet<string>,
+): Headers {
+  const headers = new Headers({
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  const origin = request.headers.get('origin');
+  if (
+    origin &&
+    (origin === new URL(request.url).origin || origins.has(origin))
+  ) {
+    headers.set('access-control-allow-origin', origin);
+    headers.set('vary', 'Origin');
+  }
+  return headers;
+}
+
 function rpcResponse(
   body: unknown,
   status: number,
   request: Request,
-  runtime: WorkshopRuntime,
+  origins: ReadonlySet<string>,
 ): Response {
-  const headers = corsHeaders(request, runtime);
+  const headers = responseHeaders(request, origins);
   headers.set('content-type', 'application/json; charset=utf-8');
   return new Response(JSON.stringify(body), { status, headers });
 }
 
+function unauthenticated(challenge = 'Bearer'): Response {
+  return Response.json(
+    { error: { code: 'unauthenticated', message: 'Authentication required' } },
+    {
+      status: 401,
+      headers: {
+        'cache-control': 'no-store',
+        'www-authenticate': challenge,
+      },
+    },
+  );
+}
+
 function httpError(status: number, message: string): Response {
-  return Response.json({ error: message }, { status });
+  return Response.json(
+    { error: { code: 'bad_request', message } },
+    { status, headers: { 'cache-control': 'no-store' } },
+  );
+}
+
+function methodNotAllowed(allow: string): Response {
+  return new Response('Method not allowed', {
+    status: 405,
+    headers: { allow },
+  });
 }
 
 function rpcError(
@@ -358,7 +354,7 @@ function rpcError(
   code: number,
   message: string,
   data?: unknown,
-): JsonRpcMessage {
+): Record<string, unknown> {
   return {
     jsonrpc: '2.0',
     id,
@@ -367,9 +363,8 @@ function rpcError(
 }
 
 function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new ProtocolError(-32602, 'Expected an object');
-  }
   return value as Record<string, unknown>;
 }
 
@@ -379,13 +374,17 @@ function toStructured(value: unknown): Record<string, unknown> {
     : { value };
 }
 
-function dispatchFailure(failure: WorkshopDispatchFailure): WorkshopError {
-  return new WorkshopError(
-    failure.error.code,
-    failure.error.message,
-    undefined,
-    failure.error.details,
-  );
+function boundedRequestId(value: string | null): string | null {
+  if (!value || value.length > 256 || /[\u0000-\u001f\u007f]/u.test(value))
+    return null;
+  return value;
+}
+
+function title(name: string): string {
+  return name
+    .split('_')
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 class ProtocolError extends Error {

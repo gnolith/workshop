@@ -12,12 +12,32 @@ export interface WorkshopMigrationResult {
   applied: string[];
 }
 
+export interface WorkshopMigrationPlan {
+  namespace: '@gnolith/workshop';
+  currentVersion: number;
+  targetVersion: number;
+  ready: boolean;
+  pending: readonly {
+    id: string;
+    checksum: string;
+    statements: readonly string[];
+  }[];
+}
+
 const WORKSHOP_MIGRATION_NAMESPACE = '@gnolith/workshop';
+export type WorkshopReadOnlyPersistence = Pick<WorkshopPersistence, 'prepare'>;
 
 export interface WorkshopNamespacedMigration {
   id: string;
   statements: readonly string[];
 }
+
+export const workshopNamespacedMigrationsV1: readonly WorkshopNamespacedMigration[] =
+  Object.freeze(
+    workshopMigrations.map(({ id, sql }) =>
+      Object.freeze({ id, statements: Object.freeze(splitStatements(sql)) }),
+    ),
+  );
 
 export interface WorkshopAppliedMigration {
   namespace: string;
@@ -53,6 +73,52 @@ export class WorkshopMigrationError extends Error {
     this.name = 'WorkshopMigrationError';
   }
 }
+
+/** Read-only migration planning for an operator-owned shared DB capability. */
+export async function planWorkshopMigrations(
+  persistence: WorkshopPersistence,
+  ledgerApi: WorkshopMigrationLedgerApi,
+): Promise<WorkshopMigrationPlan> {
+  const currentVersion = await installedVersion(persistence);
+  if (currentVersion > WORKSHOP_SCHEMA_VERSION)
+    throw new WorkshopMigrationError(
+      `Workshop schema version ${currentVersion} is newer than supported version ${WORKSHOP_SCHEMA_VERSION}`,
+    );
+  const applied = await ledgerApi.readAppliedMigrations(
+    persistence,
+    WORKSHOP_MIGRATION_NAMESPACE,
+  );
+  const byId = new Map(applied.map((entry) => [entry.id, entry]));
+  const pending: WorkshopMigrationPlan['pending'][number][] = [];
+  for (const migration of workshopMigrations) {
+    const statements = splitStatements(migration.sql);
+    const expectedChecksum = await ledgerApi.checksumMigration({
+      id: migration.id,
+      statements,
+    });
+    const recorded = byId.get(migration.id);
+    if (recorded && recorded.checksum !== expectedChecksum)
+      throw new WorkshopMigrationError(
+        `Checksum drift detected for ${WORKSHOP_MIGRATION_NAMESPACE}/${migration.id}`,
+      );
+    if (!recorded)
+      pending.push({
+        id: migration.id,
+        checksum: expectedChecksum,
+        statements,
+      });
+  }
+  return {
+    namespace: WORKSHOP_MIGRATION_NAMESPACE,
+    currentVersion,
+    targetVersion: WORKSHOP_SCHEMA_VERSION,
+    ready: currentVersion === WORKSHOP_SCHEMA_VERSION && pending.length === 0,
+    pending,
+  };
+}
+
+/** Read-only alias used by installation diagnostics and backup validation. */
+export const inspectWorkshopMigrations = planWorkshopMigrations;
 
 /**
  * Apply Workshop-owned schema migrations to any supported persistence adapter.
@@ -129,7 +195,7 @@ export async function applyWorkshopMigrations(
 }
 
 async function installedVersion(
-  persistence: WorkshopPersistence,
+  persistence: WorkshopReadOnlyPersistence,
 ): Promise<number> {
   const schemaTable = await persistence
     .prepare(
@@ -160,6 +226,21 @@ async function installedVersion(
   return row.version;
 }
 
+/**
+ * Verify the exact Workshop-owned schema boundary produced by Workshop 0.4.2.
+ * This is read-only and deliberately does not inspect another package's tables.
+ */
+export async function assertWorkshopLegacyV042Schema(
+  persistence: WorkshopReadOnlyPersistence,
+): Promise<void> {
+  const version = await installedVersion(persistence);
+  if (version !== 6)
+    throw new WorkshopMigrationError(
+      `Workshop 0.4.2 legacy source must attest schema version 6; found ${version}`,
+    );
+  await validateLegacySchema(persistence, version);
+}
+
 function packageVersionForSchema(version: number): string | undefined {
   switch (version) {
     case 1:
@@ -172,6 +253,12 @@ function packageVersionForSchema(version: number): string | undefined {
       return '0.3.0';
     case 6:
       return '0.4.0';
+    case 7:
+    case 8:
+    case 9:
+    case 10:
+    case 11:
+      return '0.5.0';
     default:
       return undefined;
   }
@@ -182,18 +269,18 @@ async function loadDiamondMigrationLedger(): Promise<WorkshopMigrationLedgerApi>
     return await import('@gnolith/diamond');
   } catch (cause) {
     throw new WorkshopMigrationError(
-      'Applying Workshop migrations requires the @gnolith/diamond 0.4 migration ledger API',
+      'Applying Workshop migrations requires the @gnolith/diamond 0.5 migration ledger API',
       { cause },
     );
   }
 }
 
 async function validateLegacySchema(
-  persistence: WorkshopPersistence,
+  persistence: WorkshopReadOnlyPersistence,
   installed: number,
 ): Promise<void> {
-  if (installed === 6) {
-    await validateCanonicalSearchSchema(persistence);
+  if (installed >= 6) {
+    await validateCanonicalSearchSchema(persistence, installed);
     return;
   }
   const expected = legacySchema(installed);
@@ -339,7 +426,8 @@ async function validateLegacySchema(
 }
 
 async function validateCanonicalSearchSchema(
-  persistence: WorkshopPersistence,
+  persistence: WorkshopReadOnlyPersistence,
+  installed: number,
 ): Promise<void> {
   const tables = await persistence
     .prepare(
@@ -347,21 +435,43 @@ async function validateCanonicalSearchSchema(
     )
     .all<{ name: string; sql: string }>();
   const expectedTables = [
+    ...(installed >= 11
+      ? [
+          'workshop_authorization_admin_receipts',
+          'workshop_authorization_audit',
+          'workshop_authorization_principals',
+        ]
+      : []),
+    ...(installed >= 8
+      ? ['workshop_bootstrap_receipts', 'workshop_credentials']
+      : []),
     'workshop_cursor_entries',
     'workshop_cursor_snapshots',
     'workshop_memories',
     'workshop_memory_revisions',
+    ...(installed >= 11 ? ['workshop_oauth_bindings'] : []),
     'workshop_onboarding_runs',
     'workshop_onboarding_steps',
+    ...(installed >= 9 ? ['workshop_operation_receipts'] : []),
     'workshop_prompt_revisions',
     'workshop_prompts',
     'workshop_schema',
+    ...(installed >= 11
+      ? [
+          'workshop_semantic_configuration_receipts',
+          'workshop_semantic_configuration_state',
+        ]
+      : []),
+    ...(installed >= 7
+      ? ['workshop_task_lease_events', 'workshop_task_lease_receipts']
+      : []),
     'workshop_task_revisions',
     'workshop_tasks',
+    ...(installed >= 11 ? ['workshop_workspace_memberships'] : []),
   ];
   const actualTables = tables.results.map(({ name }) => name);
   if (JSON.stringify(actualTables) !== JSON.stringify(expectedTables))
-    throw adoptionError(installedVersionNumber(), 'table set does not match');
+    throw adoptionError(installed, 'table set does not match');
 
   const requiredColumns: Record<string, readonly string[]> = {
     workshop_tasks: [
@@ -377,6 +487,14 @@ async function validateCanonicalSearchSchema(
       'policy_revision',
       'search_event_id',
       'search_event_sequence',
+      ...(installed >= 7
+        ? [
+            'lease_id',
+            'lease_token_digest',
+            'lease_owner_principal_id',
+            'lease_expires_at',
+          ]
+        : []),
     ],
     workshop_memories: [
       'title',
@@ -423,10 +541,7 @@ async function validateCanonicalSearchSchema(
       .all<ColumnInfo>();
     const names = new Set(columns.results.map(({ name }) => name));
     if (required.some((name) => !names.has(name)))
-      throw adoptionError(
-        installedVersionNumber(),
-        `${table} columns do not match`,
-      );
+      throw adoptionError(installed, `${table} columns do not match`);
   }
 
   const indexes = await persistence
@@ -435,18 +550,26 @@ async function validateCanonicalSearchSchema(
     )
     .all<{ name: string }>();
   const requiredIndexes = [
+    ...(installed >= 11
+      ? ['workshop_authorization_audit_installation_idx']
+      : []),
+    ...(installed >= 8 ? ['workshop_credentials_principal_idx'] : []),
     'workshop_cursor_snapshots_expiry_idx',
     'workshop_memories_authorization_idx',
     'workshop_memories_idempotency_idx',
     'workshop_memories_updated_idx',
     'workshop_memory_revisions_history_idx',
+    ...(installed >= 11 ? ['workshop_oauth_bindings_principal_idx'] : []),
     'workshop_onboarding_runs_state_idx',
     'workshop_onboarding_steps_state_idx',
+    ...(installed >= 9 ? ['workshop_operation_receipts_subject_idx'] : []),
     'workshop_prompt_revisions_history_idx',
     'workshop_prompts_authorization_idx',
     'workshop_prompts_list_idx',
+    ...(installed >= 7 ? ['workshop_task_lease_events_task_idx'] : []),
     'workshop_task_revisions_history_idx',
     'workshop_tasks_authorization_idx',
+    ...(installed >= 7 ? ['workshop_tasks_lease_expiry_idx'] : []),
     'workshop_tasks_role_idx',
     'workshop_tasks_state_idx',
     'workshop_tasks_updated_idx',
@@ -455,11 +578,7 @@ async function validateCanonicalSearchSchema(
     JSON.stringify(indexes.results.map(({ name }) => name)) !==
     JSON.stringify(requiredIndexes)
   )
-    throw adoptionError(installedVersionNumber(), 'index set does not match');
-}
-
-function installedVersionNumber(): number {
-  return 6;
+    throw adoptionError(installed, 'index set does not match');
 }
 
 interface ColumnInfo {
