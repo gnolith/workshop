@@ -70,6 +70,7 @@ describe('Workshop semantic configuration control plane', () => {
       revision: 1,
       fingerprint: 'e'.repeat(64),
       ready: false,
+      backend: 'sqlite',
     });
     await expect(
       configureWorkshopSemanticsV1(

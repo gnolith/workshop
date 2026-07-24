@@ -161,7 +161,7 @@ class WorkshopAuthorizationAdministration implements WorkshopAuthorizationAdmini
         policyRevision: committed.authorizationRevision,
       };
     } catch (error) {
-      mapTaprootAdministrationError(error);
+      mapTaprootAdministrationError(error, action);
     }
   }
 
@@ -750,7 +750,7 @@ function parseReceipt(value: string): Record<string, unknown> {
   }
 }
 
-function mapTaprootAdministrationError(error: unknown): never {
+function mapTaprootAdministrationError(error: unknown, action: string): never {
   const candidate = error as { name?: unknown; code?: unknown };
   const name = typeof candidate?.name === 'string' ? candidate.name : '';
   const code = typeof candidate?.code === 'string' ? candidate.code : '';
@@ -774,15 +774,25 @@ function mapTaprootAdministrationError(error: unknown): never {
       404,
     );
   if (
+    action === 'visibility-policy-set' &&
+    (name === 'InvalidAuthorizationError' ||
+      name === 'InvalidEntityError' ||
+      code === 'INVALID_AUTHORIZATION' ||
+      code === 'INVALID_ENTITY')
+  )
+    throw new WorkshopError(
+      'validation_failed',
+      'Visibility clauses are unsatisfiable for the administering principal',
+      400,
+    );
+  if (
     name === 'InvalidEntityError' ||
     name === 'InvalidStatementError' ||
     name === 'InvalidDatatypeError' ||
-    name === 'InvalidAuthorizationError' ||
     name === 'TypeError' ||
     code === 'INVALID_ENTITY' ||
     code === 'INVALID_STATEMENT' ||
-    code === 'INVALID_DATATYPE' ||
-    code === 'INVALID_AUTHORIZATION'
+    code === 'INVALID_DATATYPE'
   )
     throw new WorkshopError(
       'validation_failed',

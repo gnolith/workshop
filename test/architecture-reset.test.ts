@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_DIGEST,
@@ -13,6 +15,15 @@ import {
 } from '../src/producers.js';
 import { createWorkshopBackupApi } from '../src/backup.js';
 import { createOperationRuntime } from '../src/operations.js';
+
+type FixtureValidator = ((value: unknown) => boolean) & {
+  errors?: unknown;
+};
+const AjvConstructor = createRequire(import.meta.url)('ajv') as new (options: {
+  strict: boolean;
+}) => {
+  compile(schema: unknown): FixtureValidator;
+};
 
 const principal: AuthenticatedPrincipal = {
   installationId: 'installation:test',
@@ -266,6 +277,124 @@ describe('architecture reset contract', () => {
       versions: { server: '0.5.0', operationSchema: 2 },
       operationCatalogDigest: CATALOG_DIGEST,
     });
+  });
+
+  it('publishes versioned bounded Alembic-facing status evidence fixtures', () => {
+    const artifact = JSON.parse(
+      readFileSync(
+        new URL(
+          '../schemas/fixtures/workshop-status-evidence-v1.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      format: string;
+      version: number;
+      operationSchemaVersion: number;
+      fixtures: Record<string, Record<string, unknown>>;
+    };
+    expect(artifact).toMatchObject({
+      format: 'gnolith-workshop-status-evidence-fixtures-v1',
+      version: 1,
+      operationSchemaVersion: 2,
+    });
+    const status = operationCatalog.find(
+      ({ name }) => name === 'gnolith_status',
+    );
+    expect(status).toBeDefined();
+    const validate = new AjvConstructor({
+      strict: false,
+    }).compile(status!.outputSchema);
+    for (const [name, fixture] of Object.entries(artifact.fixtures))
+      expect(
+        validate(fixture),
+        `${name}: ${JSON.stringify(validate.errors)}`,
+      ).toBe(true);
+    expect(
+      artifact.fixtures.materializationPendingSqlite?.semanticState,
+    ).toMatchObject({
+      diagnostic: {
+        format: 'gnolith-workshop-semantic-diagnostic-v1',
+        version: 1,
+        code: 'materialization-pending',
+        retryable: true,
+        backend: 'sqlite',
+        repair: 'retry',
+      },
+    });
+    expect(
+      artifact.fixtures.providerUnavailableQdrant?.semanticState,
+    ).toMatchObject({
+      diagnostic: {
+        code: 'provider-unavailable',
+        retryable: true,
+        backend: 'qdrant',
+      },
+    });
+    expect(artifact.fixtures.ready?.semanticState).toMatchObject({
+      state: 'ready',
+      ready: true,
+      diagnostic: null,
+    });
+    expect(
+      artifact.fixtures.providerUnavailableAfterRestart?.semanticState,
+    ).toMatchObject({
+      state: 'degraded',
+      ready: false,
+      diagnostic: {
+        code: 'provider-unavailable',
+        retryable: true,
+        backend: 'sqlite',
+      },
+    });
+    const pending = artifact.fixtures.materializationPendingSqlite!;
+    for (const mutate of [
+      (value: Record<string, unknown>) => {
+        (
+          (value.semanticState as Record<string, unknown>).diagnostic as Record<
+            string,
+            unknown
+          >
+        ).secret = 'must-not-appear';
+      },
+      (value: Record<string, unknown>) => {
+        (
+          (value.semanticState as Record<string, unknown>).diagnostic as Record<
+            string,
+            unknown
+          >
+        ).backend = 'remote-url';
+      },
+      (value: Record<string, unknown>) => {
+        (
+          (value.semanticState as Record<string, unknown>).diagnostic as Record<
+            string,
+            unknown
+          >
+        ).retryable = 'yes';
+      },
+      (value: Record<string, unknown>) => {
+        (
+          (value.semanticState as Record<string, unknown>).diagnostic as Record<
+            string,
+            unknown
+          >
+        ).cause = { message: 'recursive detail' };
+      },
+      (value: Record<string, unknown>) => {
+        (
+          (value.semanticState as Record<string, unknown>).diagnostic as Record<
+            string,
+            unknown
+          >
+        ).code = 'x'.repeat(4097);
+      },
+    ]) {
+      const invalid = structuredClone(pending);
+      mutate(invalid);
+      expect(validate(invalid)).toBe(false);
+    }
   });
 
   it('rejects malformed entity commands before Taproot dispatch', async () => {

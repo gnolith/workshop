@@ -274,6 +274,28 @@ describe('Workshop external search producers', () => {
         );
       }
       expect(targetRevision).toBe(3);
+      await expect(
+        admin({
+          version: 1,
+          action: 'visibility-policy-set',
+          expectedPolicyRevision: context.principal.authorizationRevision,
+          idempotencyKey: 'visibility-worker-and-rejected-v1',
+          target: { kind: 'entity', id: entity.entityId },
+          expectedTargetRevision: targetRevision,
+          visibility: {
+            version: 1,
+            clauses: [
+              [{ kind: 'principal', principalId: 'principal:owner' }],
+              [{ kind: 'principal', principalId: 'principal:worker' }],
+            ],
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: 'validation_failed',
+        status: 400,
+        message:
+          'Visibility clauses are unsatisfiable for the administering principal',
+      });
       const visibilityInput = {
         version: 1,
         action: 'visibility-policy-set',
@@ -284,7 +306,10 @@ describe('Workshop external search producers', () => {
         visibility: {
           version: 1,
           clauses: [
-            [{ kind: 'workspace', workspaceId: 'workspace:admin-test' }],
+            [
+              { kind: 'principal', principalId: 'principal:owner' },
+              { kind: 'principal', principalId: 'principal:worker' },
+            ],
           ],
         },
       } as const;

@@ -49,8 +49,12 @@ export interface WorkshopStatusSnapshot {
     fingerprint: string | null;
     ready: boolean;
     diagnostic: {
+      format: 'gnolith-workshop-semantic-diagnostic-v1';
+      version: 1;
       code: 'materialization-pending' | 'provider-unavailable';
       retryable: boolean;
+      backend: 'sqlite' | 'qdrant';
+      repair: 'retry';
     } | null;
   };
   producers: {

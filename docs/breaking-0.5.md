@@ -45,6 +45,19 @@ for Ollama-compatible providers), not API base URLs. A persisted failed
 configuration degrades readiness but does not stop or restart-loop the
 Workshop service.
 
+Semantic readiness diagnostics use the exact versioned
+`gnolith-workshop-semantic-diagnostic-v1` shape with bounded `code`,
+`retryable`, `backend`, and `repair` fields. Ready and unconfigured states use
+`diagnostic: null`. Consumers branch on `format` and `version`; generated
+fixtures in `schemas/fixtures/workshop-status-evidence-v1.json` cover ready,
+pending SQLite, unavailable Qdrant, and unavailable-after-restart states
+without exposing endpoints or credentials.
+
+Visibility scopes are canonical CNF: clauses are ANDed and atoms within a
+clause are ORed. An owner-or-reader policy is one clause with two principal
+atoms. Two singleton clauses require both principals and are rejected if the
+administering principal would lose visibility.
+
 For filesystem resource backup and restore, instantiate
 `createLocalFilesystemResourceBlobPortsV1({ root })` from
 `@gnolith/workshop/backup` and pass its `backup` and `restore` ports to the

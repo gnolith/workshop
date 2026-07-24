@@ -38,6 +38,7 @@ export interface WorkshopSemanticStatusV1 {
   revision: number | null;
   fingerprint: string | null;
   ready: boolean;
+  backend: 'sqlite' | 'qdrant' | null;
 }
 
 export async function configureWorkshopSemanticsV1(
@@ -160,12 +161,17 @@ export async function readWorkshopSemanticStatusV1(
 ): Promise<WorkshopSemanticStatusV1> {
   const row = await db
     .prepare(
-      `SELECT revision, fingerprint, ready
+      `SELECT revision, fingerprint, ready, configuration_json
        FROM workshop_semantic_configuration_state
        WHERE installation_id = ?`,
     )
     .bind(installationId)
-    .first<{ revision: number; fingerprint: string; ready: number }>();
+    .first<{
+      revision: number;
+      fingerprint: string;
+      ready: number;
+      configuration_json: string;
+    }>();
   if (!row)
     return {
       state: 'unconfigured',
@@ -173,6 +179,7 @@ export async function readWorkshopSemanticStatusV1(
       revision: null,
       fingerprint: null,
       ready: false,
+      backend: null,
     };
   return {
     state: row.ready === 1 ? 'ready' : 'degraded',
@@ -180,7 +187,23 @@ export async function readWorkshopSemanticStatusV1(
     revision: Number(row.revision),
     fingerprint: row.fingerprint,
     ready: row.ready === 1,
+    backend: semanticBackend(row.configuration_json),
   };
+}
+
+function semanticBackend(value: string): 'sqlite' | 'qdrant' {
+  try {
+    const parsed = JSON.parse(value) as { vector?: { kind?: unknown } };
+    if (parsed.vector?.kind === 'sqlite' || parsed.vector?.kind === 'qdrant')
+      return parsed.vector.kind;
+  } catch {
+    // Fail closed below without returning persisted configuration content.
+  }
+  throw new WorkshopError(
+    'internal_error',
+    'Semantic configuration status is invalid',
+    500,
+  );
 }
 
 function exactInput(

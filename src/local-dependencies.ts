@@ -756,12 +756,16 @@ async function workshopLocalStatus(
           : semanticReady
             ? null
             : {
+                format: 'gnolith-workshop-semantic-diagnostic-v1',
+                version: 1,
                 code:
                   semanticHealthValue.circuitOpen ||
                   semanticHealthValue.failureCode !== null
                     ? 'provider-unavailable'
                     : 'materialization-pending',
                 retryable: true,
+                backend: persistedSemantic.backend!,
+                repair: 'retry',
               },
     },
     producers: {

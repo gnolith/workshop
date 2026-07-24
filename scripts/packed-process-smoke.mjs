@@ -361,9 +361,22 @@ export async function createWorkshopSemanticConfigurationDependencies(
     .update(Buffer.from('gnolith-local-bearer-v1\0', 'utf8'))
     .update(delegatedTokenBytes)
     .digest('hex');
-  let policyRevision = (
-    await successfulToolCall(origin, token, 100, 'gnolith_status', {})
-  ).authorizationRevision;
+  const initialStatus = await successfulToolCall(
+    origin,
+    token,
+    100,
+    'gnolith_status',
+    {},
+  );
+  assert.deepEqual(initialStatus.semanticState.diagnostic, {
+    format: 'gnolith-workshop-semantic-diagnostic-v1',
+    version: 1,
+    code: 'materialization-pending',
+    retryable: true,
+    backend: 'sqlite',
+    repair: 'retry',
+  });
+  let policyRevision = initialStatus.authorizationRevision;
   const authorizationMutation = async (id, argumentsValue) => {
     const result = await successfulToolCall(
       origin,
@@ -749,6 +762,134 @@ export async function createWorkshopSemanticConfigurationDependencies(
     );
     policyRevision = administered.policyRevision;
   }
+  const orVisibilityEntity = await successfulToolCall(
+    origin,
+    token,
+    150,
+    'create_item',
+    {
+      idempotencyKey: 'packed-owner-reader-or-item-v1',
+      authoredText:
+        'Create the owner and reader OR visibility restart fixture.',
+      data: {
+        id: 'Q2',
+        labels: {
+          en: {
+            language: 'en',
+            value: 'Orchard heliotrope visibility proof',
+          },
+        },
+      },
+    },
+  );
+  assert.equal(orVisibilityEntity.newRevision, 1);
+  policyRevision = (
+    await successfulToolCall(origin, token, 151, 'gnolith_status', {})
+  ).authorizationRevision;
+  const beforeRejectedOr = await successfulToolCall(
+    origin,
+    token,
+    152,
+    'authorization_admin',
+    { version: 1, action: 'status' },
+  );
+  const rejectedAndVisibility = await mcp(origin, token, 153, 'tools/call', {
+    name: 'authorization_admin',
+    arguments: {
+      version: 1,
+      action: 'visibility-policy-set',
+      expectedPolicyRevision: policyRevision,
+      idempotencyKey: 'packed-owner-reader-and-rejected-v1',
+      target: { kind: 'entity', id: 'Q2' },
+      expectedTargetRevision: 1,
+      visibility: {
+        version: 1,
+        clauses: [
+          [{ kind: 'principal', principalId: 'principal:packed' }],
+          [{ kind: 'principal', principalId: 'principal:outsider' }],
+        ],
+      },
+    },
+  });
+  assert.equal(
+    toolErrorCode(rejectedAndVisibility),
+    'validation_failed',
+    JSON.stringify(rejectedAndVisibility),
+  );
+  assert.match(JSON.stringify(rejectedAndVisibility), /unsatisfiable/u);
+  const afterRejectedOr = await successfulToolCall(
+    origin,
+    token,
+    154,
+    'authorization_admin',
+    { version: 1, action: 'status' },
+  );
+  assert.equal(
+    afterRejectedOr.value.audits,
+    beforeRejectedOr.value.audits,
+    JSON.stringify(afterRejectedOr),
+  );
+  const acceptedOrVisibility = await successfulToolCall(
+    origin,
+    token,
+    155,
+    'authorization_admin',
+    {
+      version: 1,
+      action: 'visibility-policy-set',
+      expectedPolicyRevision: policyRevision,
+      idempotencyKey: 'packed-owner-reader-or-v1',
+      target: { kind: 'entity', id: 'Q2' },
+      expectedTargetRevision: 1,
+      visibility: {
+        version: 1,
+        clauses: [
+          [
+            { kind: 'principal', principalId: 'principal:packed' },
+            { kind: 'principal', principalId: 'principal:outsider' },
+          ],
+        ],
+      },
+    },
+  );
+  policyRevision = acceptedOrVisibility.policyRevision;
+  const acceptedOrStatus = await successfulToolCall(
+    origin,
+    token,
+    156,
+    'authorization_admin',
+    { version: 1, action: 'status' },
+  );
+  assert.equal(
+    acceptedOrStatus.value.audits,
+    beforeRejectedOr.value.audits + 1,
+  );
+  const acceptedOrPolicy = await successfulToolCall(
+    origin,
+    token,
+    157,
+    'authorization_admin',
+    {
+      version: 1,
+      action: 'effective-policy',
+      target: { kind: 'entity', id: 'Q2' },
+    },
+  );
+  assert.equal(acceptedOrPolicy.value.sourceRevision, 2);
+  assert.deepEqual(acceptedOrPolicy.value.visibility.clauses, [
+    [
+      { kind: 'principal', principalId: 'principal:outsider' },
+      { kind: 'principal', principalId: 'principal:packed' },
+    ],
+  ]);
+  const outsiderOrRead = await successfulToolCall(
+    origin,
+    outsiderToken,
+    158,
+    'get_entity',
+    { entityId: 'Q2' },
+  );
+  assert.match(JSON.stringify(outsiderOrRead), /"id":"Q2"/u);
   const outsiderRead = await mcp(origin, outsiderToken, 135, 'tools/call', {
     name: 'get_entity',
     arguments: { entityId: 'Q900' },
@@ -902,6 +1043,29 @@ export async function createWorkshopSemanticConfigurationDependencies(
   assert.equal(recovered.lexicalReady, true);
   assert.equal(recovered.semanticState.ready, true);
   assert.equal(recovered.semanticState.diagnostic, null);
+  const outsiderOrReadAfterRestart = await successfulToolCall(
+    origin,
+    outsiderToken,
+    159,
+    'get_entity',
+    { entityId: 'Q2' },
+  );
+  assert.match(JSON.stringify(outsiderOrReadAfterRestart), /"id":"Q2"/u);
+  const outsiderOrSearchAfterRestart = await successfulToolCall(
+    origin,
+    outsiderToken,
+    160,
+    'search',
+    {
+      text: 'orchard heliotrope',
+      kinds: ['item'],
+      limit: 20,
+    },
+  );
+  assert.ok(
+    outsiderOrSearchAfterRestart.items.some((entry) => entry.sourceId === 'Q2'),
+    JSON.stringify(outsiderOrSearchAfterRestart),
+  );
   const semanticOnly = await successfulToolCall(origin, token, 216, 'search', {
     text: 'meaning that has no lexical token overlap',
     kinds: ['item'],
@@ -1178,6 +1342,21 @@ export async function createWorkshopSemanticConfigurationDependencies(
     },
   );
   assert.equal(qdrantConfiguration.configurationId, 'packed-openai-qdrant-v1');
+  const qdrantPending = await successfulToolCall(
+    origin,
+    token,
+    2201,
+    'gnolith_status',
+    {},
+  );
+  assert.deepEqual(qdrantPending.semanticState.diagnostic, {
+    format: 'gnolith-workshop-semantic-diagnostic-v1',
+    version: 1,
+    code: 'materialization-pending',
+    retryable: true,
+    backend: 'qdrant',
+    repair: 'retry',
+  });
   const qdrantEstimate = await successfulToolCall(
     origin,
     token,
@@ -1306,8 +1485,12 @@ export async function createWorkshopSemanticConfigurationDependencies(
   const degradedBody = await degraded.json();
   assert.equal(degradedBody.lexicalReady, true);
   assert.deepEqual(degradedBody.semanticState.diagnostic, {
+    format: 'gnolith-workshop-semantic-diagnostic-v1',
+    version: 1,
     code: 'provider-unavailable',
     retryable: true,
+    backend: 'sqlite',
+    repair: 'retry',
   });
   assert.doesNotMatch(JSON.stringify(degradedBody), /127\.0\.0\.1|secret/u);
   await terminate(child);
@@ -1354,7 +1537,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ],
   );
   process.stdout.write(
-    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: 'e2d1e0f09e4dbad786d14cb4a9dd86dbe56a64d274e252bbbb1956b2c8933c85' })}\n`,
+    `${JSON.stringify({ packedProcess: 'ok', catalogDigest: 'af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f' })}\n`,
   );
 } finally {
   if (child?.exitCode === null) await terminate(child);

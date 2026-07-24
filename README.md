@@ -64,6 +64,18 @@ ends in `/api/embed`. A configured but degraded semantic provider makes
 `/health/ready` return 503 without preventing the process from starting or
 serving lexical search.
 
+`gnolith_status.semanticState.diagnostic` is either `null` or the exact
+secret-safe `gnolith-workshop-semantic-diagnostic-v1` object. The versioned
+object reports only a bounded code, retryability, `sqlite|qdrant` backend, and
+the bounded `retry` repair class. It never includes URLs, credential selectors,
+paths, provider messages, or recursive causes. Exact downstream fixtures are
+published at `schemas/fixtures/workshop-status-evidence-v1.json`.
+
+Authorization visibility uses canonical CNF. The `clauses` array is ANDed,
+while atoms inside one clause are ORed. Owner-or-reader is one clause containing
+both principal atoms. Two singleton clauses mean owner-and-reader and are
+rejected when the administering principal cannot satisfy the resulting scope.
+
 Verified Waystone assets should use the exported `/app` mount recommendation.
 The root, `/mcp`, `/health`, `/api`, and `/.well-known` namespaces cannot be
 used or shadowed by an asset mount. The Node listener rejects encoded dot

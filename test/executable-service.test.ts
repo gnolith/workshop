@@ -477,8 +477,12 @@ describe('executable listener and authentication', () => {
               fingerprint: 'd'.repeat(64),
               ready: false,
               diagnostic: {
+                format: 'gnolith-workshop-semantic-diagnostic-v1',
+                version: 1,
                 code: 'provider-unavailable',
                 retryable: true,
+                backend: 'sqlite',
+                repair: 'retry',
               },
             },
             producers: ready.producers,
@@ -494,8 +498,12 @@ describe('executable listener and authentication', () => {
             state: 'degraded',
             ready: false,
             diagnostic: {
+              format: 'gnolith-workshop-semantic-diagnostic-v1',
+              version: 1,
               code: 'provider-unavailable',
               retryable: true,
+              backend: 'sqlite',
+              repair: 'retry',
             },
           },
         };
@@ -514,8 +522,12 @@ describe('executable listener and authentication', () => {
         semanticState: {
           ready: false,
           diagnostic: {
+            format: 'gnolith-workshop-semantic-diagnostic-v1',
+            version: 1,
             code: 'provider-unavailable',
             retryable: true,
+            backend: 'sqlite',
+            repair: 'retry',
           },
         },
       });

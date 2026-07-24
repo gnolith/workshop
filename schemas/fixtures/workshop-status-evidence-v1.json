@@ -1,0 +1,198 @@
+{
+  "format": "gnolith-workshop-status-evidence-fixtures-v1",
+  "version": 1,
+  "operationSchemaVersion": 2,
+  "fixtures": {
+    "ready": {
+      "installationId": "installation:status-fixture",
+      "baseIri": "https://status-fixture.invalid/",
+      "principalId": "principal:status-fixture",
+      "credentialId": "credential:status-fixture",
+      "activeWorkspaceId": "workspace:status-fixture",
+      "capabilities": ["read"],
+      "authorizationRevision": 7,
+      "migrationReadiness": {
+        "namespace": "@gnolith/workshop",
+        "version": 11,
+        "ready": true
+      },
+      "compatibility": { "diamond": true, "taproot": true },
+      "canonicalReady": true,
+      "authorizationReady": true,
+      "lexicalReady": true,
+      "producers": {
+        "ready": true,
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "kinds": ["task", "memory", "prompt"]
+      },
+      "blobReady": true,
+      "versions": { "server": "0.5.0", "operationSchema": 2 },
+      "operationCatalogDigest": "af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f",
+      "semanticState": {
+        "state": "ready",
+        "configured": true,
+        "revision": 1,
+        "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ready": true,
+        "diagnostic": null
+      }
+    },
+    "materializationPendingSqlite": {
+      "installationId": "installation:status-fixture",
+      "baseIri": "https://status-fixture.invalid/",
+      "principalId": "principal:status-fixture",
+      "credentialId": "credential:status-fixture",
+      "activeWorkspaceId": "workspace:status-fixture",
+      "capabilities": ["read"],
+      "authorizationRevision": 7,
+      "migrationReadiness": {
+        "namespace": "@gnolith/workshop",
+        "version": 11,
+        "ready": true
+      },
+      "compatibility": { "diamond": true, "taproot": true },
+      "canonicalReady": true,
+      "authorizationReady": true,
+      "lexicalReady": true,
+      "producers": {
+        "ready": true,
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "kinds": ["task", "memory", "prompt"]
+      },
+      "blobReady": true,
+      "versions": { "server": "0.5.0", "operationSchema": 2 },
+      "operationCatalogDigest": "af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f",
+      "semanticState": {
+        "state": "degraded",
+        "configured": true,
+        "revision": 1,
+        "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ready": false,
+        "diagnostic": {
+          "format": "gnolith-workshop-semantic-diagnostic-v1",
+          "version": 1,
+          "code": "materialization-pending",
+          "retryable": true,
+          "backend": "sqlite",
+          "repair": "retry"
+        }
+      }
+    },
+    "providerUnavailableQdrant": {
+      "installationId": "installation:status-fixture",
+      "baseIri": "https://status-fixture.invalid/",
+      "principalId": "principal:status-fixture",
+      "credentialId": "credential:status-fixture",
+      "activeWorkspaceId": "workspace:status-fixture",
+      "capabilities": ["read"],
+      "authorizationRevision": 7,
+      "migrationReadiness": {
+        "namespace": "@gnolith/workshop",
+        "version": 11,
+        "ready": true
+      },
+      "compatibility": { "diamond": true, "taproot": true },
+      "canonicalReady": true,
+      "authorizationReady": true,
+      "lexicalReady": true,
+      "producers": {
+        "ready": true,
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "kinds": ["task", "memory", "prompt"]
+      },
+      "blobReady": true,
+      "versions": { "server": "0.5.0", "operationSchema": 2 },
+      "operationCatalogDigest": "af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f",
+      "semanticState": {
+        "state": "degraded",
+        "configured": true,
+        "revision": 2,
+        "fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ready": false,
+        "diagnostic": {
+          "format": "gnolith-workshop-semantic-diagnostic-v1",
+          "version": 1,
+          "code": "provider-unavailable",
+          "retryable": true,
+          "backend": "qdrant",
+          "repair": "retry"
+        }
+      }
+    },
+    "providerUnavailableAfterRestart": {
+      "installationId": "installation:status-fixture",
+      "baseIri": "https://status-fixture.invalid/",
+      "principalId": "principal:status-fixture",
+      "credentialId": "credential:status-fixture",
+      "activeWorkspaceId": "workspace:status-fixture",
+      "capabilities": ["read"],
+      "authorizationRevision": 7,
+      "migrationReadiness": {
+        "namespace": "@gnolith/workshop",
+        "version": 11,
+        "ready": true
+      },
+      "compatibility": { "diamond": true, "taproot": true },
+      "canonicalReady": true,
+      "authorizationReady": true,
+      "lexicalReady": true,
+      "producers": {
+        "ready": true,
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "kinds": ["task", "memory", "prompt"]
+      },
+      "blobReady": true,
+      "versions": { "server": "0.5.0", "operationSchema": 2 },
+      "operationCatalogDigest": "af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f",
+      "semanticState": {
+        "state": "degraded",
+        "configured": true,
+        "revision": 1,
+        "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ready": false,
+        "diagnostic": {
+          "format": "gnolith-workshop-semantic-diagnostic-v1",
+          "version": 1,
+          "code": "provider-unavailable",
+          "retryable": true,
+          "backend": "sqlite",
+          "repair": "retry"
+        }
+      }
+    },
+    "unconfigured": {
+      "installationId": "installation:status-fixture",
+      "baseIri": "https://status-fixture.invalid/",
+      "principalId": "principal:status-fixture",
+      "credentialId": "credential:status-fixture",
+      "activeWorkspaceId": "workspace:status-fixture",
+      "capabilities": ["read"],
+      "authorizationRevision": 7,
+      "migrationReadiness": {
+        "namespace": "@gnolith/workshop",
+        "version": 11,
+        "ready": true
+      },
+      "compatibility": { "diamond": true, "taproot": true },
+      "canonicalReady": true,
+      "authorizationReady": true,
+      "lexicalReady": true,
+      "producers": {
+        "ready": true,
+        "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "kinds": ["task", "memory", "prompt"]
+      },
+      "blobReady": true,
+      "versions": { "server": "0.5.0", "operationSchema": 2 },
+      "operationCatalogDigest": "af455b4d6ab3560bca9c0ab48e9db7bd3cbcfa166ace875578d88d182069071f",
+      "semanticState": {
+        "state": "unconfigured",
+        "configured": false,
+        "revision": null,
+        "fingerprint": null,
+        "ready": false,
+        "diagnostic": null
+      }
+    }
+  }
+}
