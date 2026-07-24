@@ -54,7 +54,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
       - name: Scan complete Git history for secrets
         run: |
-          "$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner .
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --verbose --no-banner .
 
   codeql:
     runs-on: ubuntu-latest
