@@ -1305,6 +1305,295 @@ export async function createWorkshopSemanticConfigurationDependencies(
     ),
     JSON.stringify(statementSearches),
   );
+  const transientResourceText = 'Transient mixed lifecycle resource payload.';
+  const transientResourceBytes = Buffer.from(transientResourceText, 'utf8');
+  const transientResource = await successfulToolCall(
+    origin,
+    token,
+    2300,
+    'create_resource',
+    {
+      idempotencyKey: 'packed-mixed-resource-v1',
+      data: {
+        id: 'resource:packed-mixed-lifecycle',
+        itemId: 'Q1',
+        title: 'Packed mixed lifecycle resource',
+        payload: { kind: 'inline-text', text: transientResourceText },
+        mediaType: 'text/plain',
+        language: 'en',
+        integrity: {
+          algorithm: 'sha256',
+          digest: createHash('sha256')
+            .update(transientResourceBytes)
+            .digest('hex'),
+          byteLength: transientResourceBytes.byteLength,
+        },
+      },
+    },
+  );
+  const transientResourceUpdated = await successfulToolCall(
+    origin,
+    token,
+    2301,
+    'update_resource',
+    {
+      resourceId: transientResource.id,
+      expectedRevision: transientResource.revision,
+      idempotencyKey: 'packed-mixed-resource-v2',
+      patch: { title: 'Packed mixed lifecycle resource revised' },
+    },
+  );
+  const transientAnnotation = await successfulToolCall(
+    origin,
+    token,
+    2302,
+    'create_annotation',
+    {
+      idempotencyKey: 'packed-mixed-annotation-v1',
+      data: {
+        id: 'annotation:packed-mixed-lifecycle',
+        body: {
+          kind: 'text',
+          text: 'Packed mixed lifecycle annotation.',
+          mediaType: 'text/plain',
+          language: 'en',
+        },
+        target: {
+          kind: 'resource',
+          sourceId: transientResource.id,
+          selector: { type: 'FragmentSelector', value: 'line=1' },
+        },
+        motivation: 'commenting',
+      },
+    },
+  );
+  const transientAnnotationUpdated = await successfulToolCall(
+    origin,
+    token,
+    2303,
+    'update_annotation',
+    {
+      annotationId: transientAnnotation.id,
+      expectedRevision: transientAnnotation.revision,
+      idempotencyKey: 'packed-mixed-annotation-v2',
+      patch: {
+        body: {
+          kind: 'text',
+          text: 'Packed mixed lifecycle annotation revised.',
+          mediaType: 'text/plain',
+          language: 'en',
+        },
+      },
+    },
+  );
+  const transientMemoryInput = {
+    slug: 'packed-mixed-lifecycle-memory',
+    idempotencyKey: 'packed-mixed-memory-v1',
+    description: 'Packed mixed lifecycle memory',
+    content: 'Packed mixed lifecycle memory revision one.',
+  };
+  const transientMemory = await successfulToolCall(
+    origin,
+    token,
+    2304,
+    'upsert_memory',
+    transientMemoryInput,
+  );
+  const beforeMemoryReplay = await successfulToolCall(
+    origin,
+    token,
+    2305,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.deepEqual(
+    await successfulToolCall(
+      origin,
+      token,
+      2306,
+      'upsert_memory',
+      transientMemoryInput,
+    ),
+    transientMemory,
+  );
+  const afterMemoryReplay = await successfulToolCall(
+    origin,
+    token,
+    2307,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.equal(
+    afterMemoryReplay.materialization.sourceHighWatermark,
+    beforeMemoryReplay.materialization.sourceHighWatermark,
+  );
+  const transientMemoryUpdated = await successfulToolCall(
+    origin,
+    token,
+    2308,
+    'upsert_memory',
+    {
+      slug: transientMemory.slug,
+      expectedRevision: transientMemory.revision,
+      idempotencyKey: 'packed-mixed-memory-v2',
+      description: transientMemory.description,
+      content: 'Packed mixed lifecycle memory revision two.',
+    },
+  );
+  const transientPrompt = await successfulToolCall(
+    origin,
+    token,
+    2309,
+    'create_prompt',
+    {
+      idempotencyKey: 'packed-mixed-prompt-v1',
+      name: 'packed-mixed-lifecycle-prompt',
+      promptText: 'Packed mixed lifecycle prompt revision one.',
+    },
+  );
+  const transientPromptUpdated = await successfulToolCall(
+    origin,
+    token,
+    2310,
+    'update_prompt',
+    {
+      promptId: transientPrompt.id,
+      expectedRevision: transientPrompt.revision,
+      idempotencyKey: 'packed-mixed-prompt-v2',
+      patch: { promptText: 'Packed mixed lifecycle prompt revision two.' },
+    },
+  );
+  const transientTask = await successfulToolCall(
+    origin,
+    token,
+    2311,
+    'create_task',
+    {
+      idempotencyKey: 'packed-mixed-task-v1',
+      description: 'Archive the packed mixed lifecycle task',
+      prompt: 'Archive after the lifecycle projection is committed.',
+    },
+  );
+  await successfulToolCall(origin, token, 2312, 'archive_task', {
+    taskId: transientTask.id,
+    expectedRevision: transientTask.revision,
+  });
+  await successfulToolCall(origin, token, 2313, 'delete_annotation', {
+    annotationId: transientAnnotation.id,
+    expectedRevision: transientAnnotationUpdated.revision,
+    idempotencyKey: 'packed-mixed-annotation-delete-v3',
+  });
+  await successfulToolCall(origin, token, 2314, 'delete_resource', {
+    resourceId: transientResource.id,
+    expectedRevision: transientResourceUpdated.revision,
+    idempotencyKey: 'packed-mixed-resource-delete-v3',
+  });
+  await successfulToolCall(origin, token, 2315, 'delete_memory', {
+    slug: transientMemory.slug,
+    expectedRevision: transientMemoryUpdated.revision,
+    idempotencyKey: 'packed-mixed-memory-delete-v3',
+  });
+  await successfulToolCall(origin, token, 2316, 'delete_prompt', {
+    promptId: transientPrompt.id,
+    expectedRevision: transientPromptUpdated.revision,
+    idempotencyKey: 'packed-mixed-prompt-delete-v3',
+  });
+  const mixedLagged = await successfulToolCall(
+    origin,
+    token,
+    2317,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.equal(mixedLagged.materialization.deadJobs, 0);
+  assert.ok(
+    mixedLagged.materialization.sourceHighWatermark >
+      mixedLagged.materialization.activeAppliedWatermark,
+    JSON.stringify(mixedLagged),
+  );
+  for (let page = 0; page < 10; page += 1) {
+    await successfulToolCall(origin, token, 2318 + page, 'search_admin', {
+      action: 'materialize',
+      limit: 100,
+      options: { maxRebuildRoots: 100 },
+    });
+  }
+  const mixedCaughtUp = await successfulToolCall(
+    origin,
+    token,
+    2328,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.deepEqual(
+    {
+      pendingJobs: mixedCaughtUp.materialization.pendingJobs,
+      leasedJobs: mixedCaughtUp.materialization.leasedJobs,
+      deadJobs: mixedCaughtUp.materialization.deadJobs,
+      staleHeads: mixedCaughtUp.materialization.staleHeads,
+      activeAppliedWatermark:
+        mixedCaughtUp.materialization.activeAppliedWatermark,
+    },
+    {
+      pendingJobs: 0,
+      leasedJobs: 0,
+      deadJobs: 0,
+      staleHeads: 0,
+      activeAppliedWatermark: mixedCaughtUp.materialization.sourceHighWatermark,
+    },
+  );
+  await successfulToolCall(origin, token, 2329, 'search_admin', {
+    action: 'rebuild',
+  });
+  const duplicateRebuild = await mcp(origin, token, 2330, 'tools/call', {
+    name: 'search_admin',
+    arguments: { action: 'rebuild' },
+  });
+  assert.equal(
+    toolErrorCode(duplicateRebuild),
+    'conflict',
+    JSON.stringify(duplicateRebuild),
+  );
+  for (let page = 0; page < 10; page += 1) {
+    await successfulToolCall(origin, token, 2331 + page, 'search_admin', {
+      action: 'materialize',
+      limit: 100,
+      options: { maxRebuildRoots: 100 },
+    });
+  }
+  await successfulToolCall(origin, token, 2341, 'search_admin', {
+    action: 'activate',
+  });
+  const mixedActivated = await successfulToolCall(
+    origin,
+    token,
+    2342,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.deepEqual(
+    {
+      status: mixedActivated.materialization.status,
+      shadowCorpusGeneration:
+        mixedActivated.materialization.shadowCorpusGeneration,
+      pendingJobs: mixedActivated.materialization.pendingJobs,
+      leasedJobs: mixedActivated.materialization.leasedJobs,
+      deadJobs: mixedActivated.materialization.deadJobs,
+      staleHeads: mixedActivated.materialization.staleHeads,
+      activeAppliedWatermark:
+        mixedActivated.materialization.activeAppliedWatermark,
+    },
+    {
+      status: 'healthy',
+      shadowCorpusGeneration: null,
+      pendingJobs: 0,
+      leasedJobs: 0,
+      deadJobs: 0,
+      staleHeads: 0,
+      activeAppliedWatermark:
+        mixedActivated.materialization.sourceHighWatermark,
+    },
+  );
   const qdrantConfiguration = await successfulToolCall(
     origin,
     token,

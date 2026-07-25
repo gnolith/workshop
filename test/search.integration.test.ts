@@ -1303,6 +1303,17 @@ describe('Workshop external search producers', () => {
       await expect(
         operationPort.call(
           'search_admin',
+          { action: 'activate' },
+          operationContext,
+        ),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        status: 409,
+        message: 'Search rebuild is not active',
+      });
+      await expect(
+        operationPort.call(
+          'search_admin',
           { action: 'materialize', limit: 1_000 },
           operationContext,
         ),
@@ -1374,6 +1385,60 @@ describe('Workshop external search producers', () => {
           )
         ).results,
       ).toEqual([]);
+      await expect(
+        search.materialization.health(context),
+      ).resolves.toMatchObject({
+        staleHeads: 0,
+        pendingJobs: 0,
+        leasedJobs: 0,
+        deadJobs: 0,
+      });
+      await expect(
+        operationPort.call(
+          'search_admin',
+          { action: 'rebuild' },
+          operationContext,
+        ),
+      ).resolves.toMatchObject({ generation: expect.any(Number) });
+      await expect(
+        operationPort.call(
+          'search_admin',
+          { action: 'rebuild' },
+          operationContext,
+        ),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        status: 409,
+        message: 'Search rebuild is already active',
+      });
+      for (let page = 0; page < 10; page += 1) {
+        await operationPort.call(
+          'search_admin',
+          {
+            action: 'materialize',
+            limit: 100,
+            options: { maxRebuildRoots: 100 },
+          },
+          operationContext,
+        );
+      }
+      await expect(
+        operationPort.call(
+          'search_admin',
+          { action: 'activate' },
+          operationContext,
+        ),
+      ).resolves.toMatchObject({ generation: expect.any(Number) });
+      await expect(
+        search.materialization.health(context),
+      ).resolves.toMatchObject({
+        status: 'healthy',
+        staleHeads: 0,
+        pendingJobs: 0,
+        leasedJobs: 0,
+        deadJobs: 0,
+        shadowCorpusGeneration: null,
+      });
     } finally {
       await db.close();
     }
