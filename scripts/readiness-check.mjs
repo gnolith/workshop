@@ -77,15 +77,15 @@ assert.deepEqual(
 );
 assert.equal(
   peerArtifacts.peers[1].commit,
-  '98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac',
+  'fa74e4550301fd575049d7c3703e39086ea93200',
 );
 assert.equal(
   peerArtifacts.peers[1].sha256,
-  '030e0bc4b58873b1ba362cc7ea0a232b769fcd5163ce7679d397c47b8f15b818',
+  '8d7b42bd3c9a283f7cbcfa8579ae71296b6e571e1813998b4c460f6db1e0e2c4',
 );
 assert.equal(
   peerArtifacts.peers[1].canonicalEvidence.sbom.sha256,
-  'cee47a765e917037ce0c3d0c28e481d0a48c204f729e9a28dff730df6bf5f3fc',
+  'c49c69b55db703a4284e60bc6d6e54c26044b391ff516f196306d21d8a8e47c9',
 );
 assert.ok(existsSync('schemas/workshop-config-v1.json'));
 console.log('repository readiness invariants passed');
