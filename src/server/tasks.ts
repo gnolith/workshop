@@ -695,6 +695,14 @@ export class TaskService {
   ): Promise<Task> {
     const context = await this.#context(authorization, 'task:write');
     const current = await this.#getForMutation(id, context);
+    if (current.archivedAt)
+      throw new WorkshopError('conflict', 'Task is already archived', 409);
+    if (current.completedAt)
+      throw new WorkshopError(
+        'conflict',
+        'Completed tasks cannot be archived',
+        409,
+      );
     const predicate = visibilitySql('workshop_tasks', context);
     const expected = revisionPrecondition(options);
     const now = this.#clock().toISOString();
@@ -1583,7 +1591,7 @@ export class TaskService {
         context,
         eventId,
         sourceId: next.id,
-        operation: 'upsert',
+        operation: next.archivedAt ? 'delete' : 'upsert',
         changeClass,
         sourceRevision: next.revision,
         sourcePolicyRevision: next.policyRevision,
