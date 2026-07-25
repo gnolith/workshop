@@ -1823,6 +1823,7 @@ export async function createWorkshopSemanticConfigurationDependencies(
     [
       'installation:packed\u0000workspace:packed\u0000principal:packed\u0000backup-fixture-second-task-v1',
       'installation:packed\u0000workspace:packed\u0000principal:packed\u0000backup-fixture-task-v1',
+      'installation:packed\u0000workspace:packed\u0000principal:packed\u0000packed-mixed-task-v1',
     ],
   );
   process.stdout.write(
