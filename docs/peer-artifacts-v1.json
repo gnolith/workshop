@@ -17,32 +17,32 @@
       "name": "taproot",
       "destinationDirectory": "taproot-artifacts",
       "repository": "https://github.com/gnolith/taproot.git",
-      "commit": "98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac",
-      "tree": "b3f11979405f1ecfca881367ce1ee40218d83d71",
+      "commit": "fa74e4550301fd575049d7c3703e39086ea93200",
+      "tree": "8b23cf40b26dda6421dd52999607d0cc89c89bf9",
       "filename": "gnolith-taproot-0.5.0.tgz",
-      "bytes": 348272,
-      "sha1": "6a1e6d54293d57067ee37e3a3aae447e04127023",
-      "sha256": "030e0bc4b58873b1ba362cc7ea0a232b769fcd5163ce7679d397c47b8f15b818",
-      "integrity": "sha512-uVA0FBUyQA3SwNGtxk93mHeoZibzzddHvbmSJ8krZKWekLbHSGNDtYBCmtPTpMZPhlrWMJYYBO+7NjpFy1Tkbg==",
+      "bytes": 349163,
+      "sha1": "cefab7e92d8af14938550a887dc0c2cdfdaeba35",
+      "sha256": "8d7b42bd3c9a283f7cbcfa8579ae71296b6e571e1813998b4c460f6db1e0e2c4",
+      "integrity": "sha512-bL5bUcqvjxO57o3e+A2Ffn9G9dZLH/i1Ltau5Mc3TcBIZRsxI4bhKuBbieOQEitG4ABktilOsqgIMG5F9joCzQ==",
       "canonicalEvidence": {
-        "hostedRunId": "30130270744",
-        "hostedArtifactId": "8610844408",
-        "hostedArtifactName": "taproot-release-candidate-98c7bc6e66b39d4bba0862a7e5dcb3a58a7882ac",
-        "expiresAt": "2026-10-22",
+        "hostedRunId": "30141709949",
+        "hostedArtifactId": "8614684487",
+        "hostedArtifactName": "taproot-release-candidate-fa74e4550301fd575049d7c3703e39086ea93200",
+        "expiresAt": "2026-10-23",
         "sbom": {
           "filename": "gnolith-taproot-0.5.0.cdx.json",
-          "bytes": 734126,
-          "sha256": "cee47a765e917037ce0c3d0c28e481d0a48c204f729e9a28dff730df6bf5f3fc"
+          "bytes": 741220,
+          "sha256": "c49c69b55db703a4284e60bc6d6e54c26044b391ff516f196306d21d8a8e47c9"
         },
         "provenance": {
           "filename": "gnolith-taproot-0.5.0.provenance.json",
           "bytes": 1150,
-          "sha256": "678f76bbef3433ba9b7f206052af68575033334c05c28cc7413d6fb68f8915fa"
+          "sha256": "03d3dc4cdcdc29e70971055d52bb375ab15171a3ae3375b8ae36d4b2b3eee6cb"
         },
         "inventory": {
           "filename": "SHA256SUMS",
           "bytes": 293,
-          "sha256": "116e33d84b5bf8578e46d8c106cf3c4ffa33b8346368d504c6114e6a532e189b"
+          "sha256": "adc2ef99ca68523c7ee7f4cdb90ee35a254fa2b2b3eff85d7799b3e05b5dcf2c"
         }
       }
     }

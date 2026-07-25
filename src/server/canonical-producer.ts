@@ -97,6 +97,7 @@ export function createWorkshopCanonicalOwnerAdapterV1(
             const participant = await registered.issuer.seal({
               sourceId: input.sourceId,
               sourceRevision: String(input.sourceRevision),
+              operation: input.operation,
               predecessor: input.predecessor,
               ownerMutationToken: token,
             });

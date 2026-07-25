@@ -416,47 +416,64 @@ async function searchAdministration(
           : { state: 'unconfigured' },
       };
     case 'materialize': {
-      const receipt = await runBoundedMaterialization(
-        runtime.materialization,
-        context,
-        {
-          limit,
-          maxRebuildRoots: optionalInteger(values.maxRebuildRoots, limit),
-          ...(typeof values.maxChunkBytes === 'number'
-            ? { maxChunkBytes: values.maxChunkBytes }
-            : {}),
-        },
-      );
-      const health = truthfulMaterializationHealth(
-        await runtime.materialization.health(context),
-      );
-      return {
-        claimed: receipt.claimed,
-        completed: receipt.completed,
-        superseded: receipt.superseded,
-        deferred: receipt.deferred,
-        dead: receipt.dead,
-        rebuildRootsEnumerated: receipt.rebuildRootsEnumerated,
-        job: {
-          state: 'completed',
-          requestedLimit: limit,
-        },
-        result: { ...receipt },
-        health,
-      };
+      try {
+        const receipt = await runBoundedMaterialization(
+          runtime.materialization,
+          context,
+          {
+            limit,
+            maxRebuildRoots: optionalInteger(values.maxRebuildRoots, limit),
+            ...(typeof values.maxChunkBytes === 'number'
+              ? { maxChunkBytes: values.maxChunkBytes }
+              : {}),
+          },
+        );
+        const health = truthfulMaterializationHealth(
+          await runtime.materialization.health(context),
+        );
+        return {
+          claimed: receipt.claimed,
+          completed: receipt.completed,
+          superseded: receipt.superseded,
+          deferred: receipt.deferred,
+          dead: receipt.dead,
+          rebuildRootsEnumerated: receipt.rebuildRootsEnumerated,
+          job: {
+            state: 'completed',
+            requestedLimit: limit,
+          },
+          result: { ...receipt },
+          health,
+        };
+      } catch (error) {
+        return mapSearchAdministrationError(error, action);
+      }
     }
     case 'retry-dead':
-      return {
-        retried: await runtime.materialization.retryDead(context, { limit }),
-      };
+      try {
+        return {
+          retried: await runtime.materialization.retryDead(context, { limit }),
+        };
+      } catch (error) {
+        return mapSearchAdministrationError(error, action);
+      }
     case 'rebuild':
-      return {
-        generation: await runtime.materialization.startShadowRebuild(context),
-      };
+      try {
+        return {
+          generation: await runtime.materialization.startShadowRebuild(context),
+        };
+      } catch (error) {
+        return mapSearchAdministrationError(error, action);
+      }
     case 'activate':
-      return {
-        generation: await runtime.materialization.activateReadyShadow(context),
-      };
+      try {
+        return {
+          generation:
+            await runtime.materialization.activateReadyShadow(context),
+        };
+      } catch (error) {
+        return mapSearchAdministrationError(error, action);
+      }
   }
   const semantic = options.semantic;
   if (!semantic) throw unavailable('Semantic search is not configured');
@@ -788,4 +805,45 @@ function invalid(message: string): WorkshopError {
 
 function unavailable(message: string): WorkshopError {
   return new WorkshopError('dependency_unavailable', message, 503);
+}
+
+function mapSearchAdministrationError(error: unknown, action: string): never {
+  if (error instanceof WorkshopError) throw error;
+  const candidate = error as {
+    name?: unknown;
+    code?: unknown;
+    message?: unknown;
+  };
+  const name = typeof candidate?.name === 'string' ? candidate.name : '';
+  const code = typeof candidate?.code === 'string' ? candidate.code : '';
+  const message =
+    typeof candidate?.message === 'string' ? candidate.message : '';
+  if (name === 'AuthorizationDeniedError' || code === 'AUTHORIZATION_DENIED')
+    throw new WorkshopError('forbidden', 'Authorization denied', 403);
+  if (action === 'rebuild' && message === 'search rebuild is already active')
+    throw new WorkshopError(
+      'conflict',
+      'Search rebuild is already active',
+      409,
+    );
+  if (action === 'activate' && message === 'search rebuild is not active')
+    throw new WorkshopError('conflict', 'Search rebuild is not active', 409);
+  if (action === 'activate' && message === 'search rebuild is not ready')
+    throw new WorkshopError('conflict', 'Search rebuild is not ready', 409);
+  if (name === 'InvalidAuthorizationError' || code === 'INVALID_AUTHORIZATION')
+    throw new WorkshopError(
+      'validation_failed',
+      'Search administration request is invalid',
+      400,
+    );
+  throw new WorkshopError(
+    'dependency_unavailable',
+    'Search administration owner is unavailable',
+    503,
+    {
+      action,
+      ownerErrorName: name.slice(0, 128) || 'unknown',
+      ownerErrorCode: code.slice(0, 128) || 'unknown',
+    },
+  );
 }
