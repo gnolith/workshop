@@ -1169,6 +1169,92 @@ export async function createWorkshopSemanticConfigurationDependencies(
   );
   assert.equal(populated.format, 'gnolith-workshop-public-backup-fixture-v1');
   assert.equal(populated.q1Visibility.target.id, 'Q1');
+  const globalTriplePatternQuery =
+    'SELECT ?subject ?predicate ?object WHERE { ?subject ?predicate ?object } LIMIT 20';
+  const validatedGlobalTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    166,
+    'validate_sparql',
+    { query: globalTriplePatternQuery },
+  );
+  assert.equal(validatedGlobalTriplePattern.valid, true);
+  assert.equal(validatedGlobalTriplePattern.queryType, 'SELECT');
+  const dryRunGlobalTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    167,
+    'query_sparql',
+    { query: globalTriplePatternQuery, dryRun: true },
+  );
+  assert.equal(dryRunGlobalTriplePattern.valid, true);
+  assert.equal(dryRunGlobalTriplePattern.dryRun, true);
+  const globalTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    168,
+    'query_sparql',
+    { query: globalTriplePatternQuery },
+  );
+  assert.equal(globalTriplePattern.status, 200);
+  assert.ok(
+    globalTriplePattern.data.results.bindings.length >= 1,
+    JSON.stringify(globalTriplePattern),
+  );
+  const triplePatternQuery =
+    'SELECT ?value WHERE { <https://packed.invalid/entity/Q1> <https://packed.invalid/prop/direct/P1> ?value }';
+  const validatedTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    170,
+    'validate_sparql',
+    { query: triplePatternQuery },
+  );
+  assert.equal(validatedTriplePattern.valid, true);
+  assert.equal(validatedTriplePattern.queryType, 'SELECT');
+  const dryRunTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    171,
+    'query_sparql',
+    { query: triplePatternQuery, dryRun: true },
+  );
+  assert.equal(dryRunTriplePattern.valid, true);
+  assert.equal(dryRunTriplePattern.dryRun, true);
+  assert.ok(dryRunTriplePattern.allowedSubjectCount >= 2);
+  const emptyGlobalQuery = await successfulToolCall(
+    origin,
+    token,
+    172,
+    'query_sparql',
+    {
+      query:
+        'SELECT ?subject WHERE { VALUES ?subject { <https://packed.invalid/entity/Q1> } FILTER(false) }',
+    },
+  );
+  assert.equal(emptyGlobalQuery.status, 200);
+  assert.deepEqual(emptyGlobalQuery.data.results.bindings, []);
+  const boundTriplePattern = await successfulToolCall(
+    origin,
+    token,
+    173,
+    'query_sparql',
+    { query: triplePatternQuery },
+  );
+  assert.equal(boundTriplePattern.status, 200);
+  assert.ok(
+    boundTriplePattern.data.results.bindings.length >= 1,
+    JSON.stringify(boundTriplePattern),
+  );
+  const unauthorizedTriplePattern = await successfulToolCall(
+    origin,
+    outsiderToken,
+    174,
+    'query_sparql',
+    { query: triplePatternQuery },
+  );
+  assert.equal(unauthorizedTriplePattern.status, 200);
+  assert.deepEqual(unauthorizedTriplePattern.data.results.bindings, []);
   const q1PolicyRevision = (
     await successfulToolCall(origin, token, 180, 'gnolith_status', {})
   ).authorizationRevision;
@@ -1474,10 +1560,73 @@ export async function createWorkshopSemanticConfigurationDependencies(
       prompt: 'Archive after the lifecycle projection is committed.',
     },
   );
-  await successfulToolCall(origin, token, 2312, 'archive_task', {
-    taskId: transientTask.id,
-    expectedRevision: transientTask.revision,
+  const transientTaskUpdated = await successfulToolCall(
+    origin,
+    token,
+    2390,
+    'update_task',
+    {
+      taskId: transientTask.id,
+      expectedRevision: transientTask.revision,
+      patch: {
+        title: 'Archive the revised packed mixed lifecycle task',
+        description: 'Archive the revised packed mixed lifecycle task',
+      },
+    },
+  );
+  const transientTaskArchived = await successfulToolCall(
+    origin,
+    token,
+    2312,
+    'archive_task',
+    {
+      taskId: transientTask.id,
+      expectedRevision: transientTaskUpdated.revision,
+    },
+  );
+  assert.equal(transientTaskArchived.revision, 3);
+  assert.ok(transientTaskArchived.archivedAt);
+  const transientTaskHistory = await successfulToolCall(
+    origin,
+    token,
+    2391,
+    'task_history',
+    { taskId: transientTask.id, limit: 10 },
+  );
+  assert.deepEqual(
+    transientTaskHistory.items.map(({ revision }) => revision),
+    [3, 2, 1],
+  );
+  const beforeArchiveReplay = await successfulToolCall(
+    origin,
+    token,
+    2392,
+    'search_admin',
+    { action: 'health' },
+  );
+  const archiveReplay = await mcp(origin, token, 2393, 'tools/call', {
+    name: 'archive_task',
+    arguments: {
+      taskId: transientTask.id,
+      expectedRevision: transientTaskArchived.revision,
+    },
   });
+  assert.equal(
+    toolErrorCode(archiveReplay),
+    'conflict',
+    JSON.stringify(archiveReplay),
+  );
+  const afterArchiveReplay = await successfulToolCall(
+    origin,
+    token,
+    2394,
+    'search_admin',
+    { action: 'health' },
+  );
+  assert.equal(
+    afterArchiveReplay.materialization.sourceHighWatermark,
+    beforeArchiveReplay.materialization.sourceHighWatermark,
+  );
   await successfulToolCall(origin, token, 2313, 'delete_annotation', {
     annotationId: transientAnnotation.id,
     expectedRevision: transientAnnotationUpdated.revision,
@@ -1511,13 +1660,11 @@ export async function createWorkshopSemanticConfigurationDependencies(
       mixedLagged.materialization.activeAppliedWatermark,
     JSON.stringify(mixedLagged),
   );
-  for (let page = 0; page < 10; page += 1) {
-    await successfulToolCall(origin, token, 2318 + page, 'search_admin', {
-      action: 'materialize',
-      limit: 100,
-      options: { maxRebuildRoots: 100 },
-    });
-  }
+  await successfulToolCall(origin, token, 2318, 'search_admin', {
+    action: 'materialize',
+    limit: 100,
+    options: { maxRebuildRoots: 100 },
+  });
   const mixedCaughtUp = await successfulToolCall(
     origin,
     token,
@@ -1541,6 +1688,24 @@ export async function createWorkshopSemanticConfigurationDependencies(
       staleHeads: 0,
       activeAppliedWatermark: mixedCaughtUp.materialization.sourceHighWatermark,
     },
+  );
+  const archivedTaskSearch = await successfulToolCall(
+    origin,
+    token,
+    2395,
+    'search',
+    {
+      text: 'Archive the revised packed mixed lifecycle task',
+      kinds: ['task'],
+      limit: 20,
+    },
+  );
+  assert.equal(
+    archivedTaskSearch.items.filter(
+      ({ sourceId }) => sourceId === transientTask.id,
+    ).length,
+    0,
+    JSON.stringify(archivedTaskSearch),
   );
   await successfulToolCall(origin, token, 2329, 'search_admin', {
     action: 'rebuild',
@@ -1680,6 +1845,36 @@ export async function createWorkshopSemanticConfigurationDependencies(
   await waitForLive(origin, child);
   const qdrantRestarted = await waitForReady(origin, token, child);
   assert.equal(qdrantRestarted.semanticState.ready, true);
+  const boundTriplePatternAfterRestart = await successfulToolCall(
+    origin,
+    token,
+    175,
+    'query_sparql',
+    { query: triplePatternQuery },
+  );
+  assert.equal(boundTriplePatternAfterRestart.status, 200);
+  assert.ok(
+    boundTriplePatternAfterRestart.data.results.bindings.length >= 1,
+    JSON.stringify(boundTriplePatternAfterRestart),
+  );
+  const archivedTaskSearchAfterRestart = await successfulToolCall(
+    origin,
+    token,
+    2396,
+    'search',
+    {
+      text: 'Archive the revised packed mixed lifecycle task',
+      kinds: ['task'],
+      limit: 20,
+    },
+  );
+  assert.equal(
+    archivedTaskSearchAfterRestart.items.filter(
+      ({ sourceId }) => sourceId === transientTask.id,
+    ).length,
+    0,
+    JSON.stringify(archivedTaskSearchAfterRestart),
+  );
   assert.ok(
     [...semanticMockPoints.values()].some(
       (point) => point.payload?.sourceId === 'Q1',

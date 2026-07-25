@@ -1180,9 +1180,41 @@ describe('Workshop external search producers', () => {
         { description: 'Archive producer changes', prompt: 'Archive safely.' },
         context,
       );
+      const revisedArchivedTask = await core.tasks.update(
+        archivedTask.id,
+        {
+          expectedRevision: archivedTask.revision,
+          title: 'Archive revised producer changes',
+        },
+        context,
+      );
       await expect(
-        core.tasks.archive(archivedTask.id, { expectedRevision: 1 }, context),
-      ).resolves.toMatchObject({ archivedAt: expect.any(String) });
+        core.tasks.archive(
+          archivedTask.id,
+          { expectedRevision: revisedArchivedTask.revision },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        revision: 3,
+        archivedAt: expect.any(String),
+      });
+      expect(
+        (await core.tasks.history(archivedTask.id, context)).map(
+          ({ revision }) => revision,
+        ),
+      ).toEqual([3, 2, 1]);
+      const beforeArchiveReplay = await search.materialization.health(context);
+      await expect(
+        core.tasks.archive(archivedTask.id, { expectedRevision: 3 }, context),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        message: 'Task is already archived',
+      });
+      await expect(
+        search.materialization.health(context),
+      ).resolves.toMatchObject({
+        sourceHighWatermark: beforeArchiveReplay.sourceHighWatermark,
+      });
       const abandonedTask = await core.tasks.create(
         {
           description: 'Reset abandoned producer claim',
@@ -1231,6 +1263,16 @@ describe('Workshop external search producers', () => {
         maxJobs: 20,
         maxRebuildRoots: 20,
       });
+      await expect(
+        search.search(
+          {
+            text: 'Archive revised producer changes',
+            kinds: ['task'],
+            limit: 10,
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ results: [] });
       const first = await search.search(
         { text: 'overlapping work', kinds: ['prompt'], limit: 10 },
         context,

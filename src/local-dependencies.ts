@@ -1,5 +1,4 @@
 import { Buffer } from 'node:buffer';
-import { Readable, Transform, type TransformCallback } from 'node:stream';
 import {
   createAuthorizedTaproot,
   commitAuthorizationBootstrapV1,
@@ -648,30 +647,30 @@ function scopedSource(
       object?: RDF.Term | null,
       graph?: RDF.Term | null,
     ) {
-      if (subject?.termType === 'NamedNode' && !allowed.has(subject.value))
-        return Readable.from([], {
-          objectMode: true,
-        }) as RDF.Stream<RDF.Quad>;
-      const filter = new Transform({
-        objectMode: true,
-        transform(
-          quad: RDF.Quad,
-          _encoding: BufferEncoding,
-          callback: TransformCallback,
-        ) {
-          callback(null, allowed.has(quad.subject.value) ? quad : undefined);
-        },
-      });
       const matches = source.match(
         subject,
         predicate,
         object,
         graph,
-      ) as unknown as Readable;
-      return matches.pipe(filter) as RDF.Stream<RDF.Quad>;
+      ) as unknown as FilterableRdfStream;
+      if (typeof matches.filter !== 'function')
+        throw new WorkshopError(
+          'dependency_unavailable',
+          'Diamond RDF source is incompatible',
+          503,
+        );
+      return matches.filter(
+        subject?.termType === 'NamedNode' && !allowed.has(subject.value)
+          ? () => false
+          : (quad) => allowed.has(quad.subject.value),
+      );
     },
   };
 }
+
+type FilterableRdfStream = RDF.Stream<RDF.Quad> & {
+  filter(predicate: (quad: RDF.Quad) => boolean): RDF.Stream<RDF.Quad>;
+};
 
 function scopedPolicy(value: unknown): {
   kind: 'taproot-scoped-sparql-policy-v1';
