@@ -132,7 +132,7 @@
     "@eslint/js": "^10.0.1",
     "@gnolith/diamond": "file:../diamond/gnolith-diamond-0.5.0.tgz",
     "@gnolith/taproot": "file:../taproot-artifacts/gnolith-taproot-0.5.0.tgz",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "ajv-formats": "^3.0.1",
     "eslint": "^10.7.0",
