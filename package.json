@@ -141,7 +141,7 @@
     "tar-stream": "^3.1.7",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.64.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
