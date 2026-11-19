@@ -1,5 +1,7 @@
 # @gnolith/workshop
 
+> **Retired.** Active use of this repository has ended.
+
 Workshop 0.5 is the self-hosted Gnolith executable. It owns one HTTP listener,
 the authenticated `/mcp` endpoint, authenticated `/health/ready`, live
 `/health/live`, and the `/api/v1/operations/*` BFF.
